@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "exasolchat"
-version = "0.1.0"
+version = "0.1.1"
 description = "Safe text-to-SQL for ExasolDB (and others) with local LLMs, RAG memory, and interactive charts."
 readme = "README.md"
 license = {file = "LICENSE"}

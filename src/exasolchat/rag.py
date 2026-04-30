@@ -9,8 +9,29 @@ Persists to ~/.exasolchat/rag/ by default.
 from __future__ import annotations
 
 import hashlib
+import math
 from pathlib import Path
 from typing import Optional
+
+
+class _BagOfWordsEF:
+    """Minimal ChromaDB embedding function — no model download required.
+
+    Uses hashed token counts projected into a fixed-dim vector, L2-normalised.
+    Good enough for SQL Q&A retrieval; zero external dependencies.
+    """
+    DIM = 512
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in input]
+
+    def _embed(self, text: str) -> list[float]:
+        vec = [0.0] * self.DIM
+        for token in text.lower().split():
+            idx = int(hashlib.md5(token.encode()).hexdigest(), 16) % self.DIM
+            vec[idx] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
 
 
 class RAGMemory:
@@ -30,8 +51,10 @@ class RAGMemory:
 
         import chromadb
         self._client = chromadb.PersistentClient(path=self._persist_dir)
+        self._ef = _BagOfWordsEF()
         self._collection = self._client.get_or_create_collection(
             name=collection_name,
+            embedding_function=self._ef,
             metadata={"hnsw:space": "cosine"},
         )
 
