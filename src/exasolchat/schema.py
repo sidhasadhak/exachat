@@ -6,8 +6,29 @@ Fallback: SQLAlchemy for any other database.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
+
+# Common date format patterns, ordered most-specific first
+_DATE_PATTERNS = [
+    (r"^\d{4}-\d{2}-\d{2}$",            "%Y-%m-%d",        "ISO 8601 (YYYY-MM-DD)"),
+    (r"^\d{4}/\d{2}/\d{2}$",            "%Y/%m/%d",        "YYYY/MM/DD"),
+    (r"^\d{2}-\d{2}-\d{4}$",            "%d-%m-%Y",        "DD-MM-YYYY"),
+    (r"^\d{2}/\d{2}/\d{4}$",            "%m/%d/%Y",        "MM/DD/YYYY"),
+    (r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}", "%Y-%m-%d %H:%M",  "ISO 8601 datetime"),
+    (r"^\d{2}-[A-Za-z]{3}-\d{4}$",      "%d-%b-%Y",        "DD-Mon-YYYY"),
+    (r"^[A-Za-z]+ \d{1,2}, \d{4}$",     "%B %d, %Y",       "Month DD, YYYY"),
+]
+
+
+def _detect_date_format(samples: list) -> Optional[str]:
+    """Return a human-readable description of the date format, or None."""
+    str_samples = [str(s) for s in samples if s is not None][:5]
+    for pattern, fmt, label in _DATE_PATTERNS:
+        if all(re.match(pattern, s) for s in str_samples if s):
+            return f"{label} (strptime format: '{fmt}')"
+    return None
 
 
 @dataclass
@@ -301,6 +322,7 @@ def introspect_duckdb(
                 nullable=col_row[2] == "YES",
                 primary_key=col_row[0] in pk_cols,
                 foreign_key=fk_map.get(col_row[0]),
+                comment=None,  # filled in after sample values are known
             ))
 
         # Row count
@@ -312,7 +334,7 @@ def introspect_duckdb(
         except Exception:
             pass
 
-        # Sample values
+        # Sample values + date format detection
         sample_values: dict[str, list] = {}
         if sample_rows > 0:
             try:
@@ -327,6 +349,17 @@ def introspect_duckdb(
                         sample_values[col] = vals
             except Exception:
                 pass
+
+        # Annotate date columns with detected format
+        for col in columns:
+            if col.comment:
+                continue
+            is_date_type = any(k in col.type.upper() for k in ("DATE", "TIME", "STAMP"))
+            is_date_name = any(k in col.name.lower() for k in ("date", "time", "day", "month", "year"))
+            if (is_date_type or is_date_name) and col.name in sample_values:
+                fmt = _detect_date_format(sample_values[col.name])
+                if fmt:
+                    col.comment = f"date format: {fmt}"
 
         comment = f"({table_type.lower()})" if table_type == "VIEW" else None
 

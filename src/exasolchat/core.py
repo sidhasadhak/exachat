@@ -7,6 +7,7 @@ validation, query execution, and chart suggestion into a single
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -38,6 +39,11 @@ class QueryResult:
     error: Optional[str] = None
     explanation: Optional[str] = None
     rag_examples_used: int = 0
+    column_warnings: list[str] = None  # ambiguous column name hints
+
+    def __post_init__(self):
+        if self.column_warnings is None:
+            self.column_warnings = []
 
 
 class ExasolChat:
@@ -162,6 +168,7 @@ class ExasolChat:
             )
 
         sql = sanitize_sql(llm_resp.sql)
+        column_warnings = _check_column_ambiguity(sql, self.schema_context)
 
         # 3. Safety validation — NEVER skip
         verdict = validate_sql(
@@ -175,6 +182,7 @@ class ExasolChat:
                 error=f"Query blocked: {verdict.reason}",
                 explanation=llm_resp.explanation,
                 rag_examples_used=len(rag_examples),
+                column_warnings=column_warnings,
             )
             self._history.append(result)
             return result
@@ -188,6 +196,7 @@ class ExasolChat:
                 error=f"Query execution failed: {e}",
                 explanation=llm_resp.explanation,
                 rag_examples_used=len(rag_examples),
+                column_warnings=column_warnings,
             )
             self._history.append(result)
             return result
@@ -224,6 +233,7 @@ class ExasolChat:
             chart_config=chart_config, chart_obj=chart_obj,
             explanation=llm_resp.explanation,
             rag_examples_used=len(rag_examples),
+            column_warnings=column_warnings,
         )
         self._history.append(result)
         return result
@@ -250,3 +260,42 @@ class ExasolChat:
 
     def __exit__(self, *args):
         self.close()
+
+
+def _normalise(name: str) -> str:
+    """Normalise a column name for fuzzy comparison: lowercase, strip spaces/underscores."""
+    return re.sub(r"[\s_]+", "", name.lower())
+
+
+def _check_column_ambiguity(sql: str, schema: "SchemaContext") -> list[str]:
+    """Detect column names in SQL that fuzzy-match schema columns but don't match exactly.
+
+    Returns warning strings like: "Did you mean 'Order Date'? (used as 'order_date')"
+    """
+    all_cols = {c.name for t in schema.tables for c in t.columns}
+    norm_to_exact: dict[str, str] = {_normalise(c): c for c in all_cols}
+
+    # Extract bare identifiers and quoted identifiers from SQL
+    tokens = set(re.findall(r'"([^"]+)"|([A-Za-z_]\w*)', sql))
+    used_names = {q or u for q, u in tokens if (q or u)}
+
+    warnings = []
+    for name in used_names:
+        if name.upper() in ("SELECT", "FROM", "WHERE", "JOIN", "ON", "AND", "OR",
+                            "GROUP", "BY", "ORDER", "HAVING", "LIMIT", "AS",
+                            "WITH", "INNER", "LEFT", "RIGHT", "OUTER", "COUNT",
+                            "SUM", "AVG", "MIN", "MAX", "DISTINCT", "NULL", "NOT",
+                            "IN", "LIKE", "CASE", "WHEN", "THEN", "ELSE", "END",
+                            "OVER", "PARTITION", "ROW_NUMBER", "RANK", "ALL",
+                            "CAST", "INTERVAL", "DATE", "TIMESTAMP", "TRUE", "FALSE"):
+            continue
+        if name in all_cols:
+            continue  # exact match — fine
+        norm = _normalise(name)
+        if norm in norm_to_exact:
+            exact = norm_to_exact[norm]
+            if exact != name:
+                warnings.append(
+                    f"⚠️ Column **'{name}'** not found — did you mean **'{exact}'**?"
+                )
+    return warnings

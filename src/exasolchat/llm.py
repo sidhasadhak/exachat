@@ -40,6 +40,32 @@ class LLMBackend(ABC):
     def suggest_chart(self, question: str, columns: list[str], row_count: int) -> dict:
         ...
 
+    _DUCKDB_DIALECT_HINTS = """
+DuckDB SQL dialect — apply these rules when the dialect is duckdb:
+- PostgreSQL-based. Use LIMIT not TOP.
+- Casting: CAST(x AS TYPE) or x::TYPE. TRY_CAST returns NULL on failure instead of an error.
+- Date/time:
+    date_trunc('month', col), date_diff('day', start, end), date_part('year', col),
+    EXTRACT(year FROM col), strftime(col, '%Y-%m-%d'), strptime(str, '%Y-%m-%d'),
+    today(), now(), current_date, col + INTERVAL '1 day'
+    Parts: year, month, day, quarter, week, weekday, hour, minute, second, epoch
+- Identifiers are case-insensitive but preserve their stored case.
+  ALWAYS use the exact column names from the schema — if schema shows "Order Date", write "Order Date";
+  if it shows order_date, write order_date. Never guess or transform column names.
+- GROUP BY ALL — groups by all non-aggregated SELECT columns automatically.
+- ORDER BY ALL — sorts by all columns.
+- SELECT * EXCLUDE(col1, col2) — wildcard minus named columns.
+- SELECT * REPLACE(expr AS col) — wildcard with column overrides.
+- QUALIFY — filter window function results without a subquery:
+    SELECT * FROM t QUALIFY ROW_NUMBER() OVER (PARTITION BY x ORDER BY y) = 1
+- PIVOT / UNPIVOT — transpose rows to columns and back.
+- UNION BY NAME — match union sides by column name, not position.
+- string_split(col, delim), regexp_matches(col, pattern), string_agg(col, sep)
+- list_agg(), array_agg(), unnest(col) for list/array columns.
+- Nested types: STRUCT (dot access), LIST, MAP.
+- Trailing commas in SELECT/FROM lists are valid syntax.
+"""
+
     def _build_sql_prompt(
         self, schema_prompt: str, question: str,
         rag_examples: Optional[str] = None,
@@ -50,20 +76,22 @@ class LLMBackend(ABC):
 SIMILAR PAST QUERIES (use these as reference for style and patterns):
 {rag_examples}
 """
+        dialect_section = self._DUCKDB_DIALECT_HINTS if "duckdb" in schema_prompt.lower() else (
+            "- For Exasol: use LIMIT, double-quote identifiers only if mixed case."
+        )
 
         return f"""You are a SQL expert. Given the database schema below, write a SQL query that answers the user's question.
 
 RULES:
 - Write ONLY a SELECT query. Never write INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, EXEC, CALL, EXPORT, IMPORT, or any DDL/DML.
-- Use only tables and columns that exist in the schema below.
-- Return the SQL inside a ```sql code block.
-- After the SQL, briefly explain what the query does.
-- If the question cannot be answered with the schema, say so clearly.
+- Use ONLY the exact table and column names from the schema below. Do not invent or rename columns.
+- Column name matching: when the user refers to a column informally (e.g. "order date"), map it to the closest schema column (e.g. "Order Date" or "order_date"). Use the schema name exactly.
+- Return SQL inside a ```sql code block.
+- After the SQL, write 1-2 sentences explaining what it does.
+- If the question cannot be answered from the schema, say so clearly instead of guessing.
 - Use appropriate aggregations, JOINs, filtering, and window functions.
 - Alias columns for human readability.
-- For Exasol: use LIMIT (not TOP), double-quote identifiers only if mixed case.
-- For DuckDB: supports LIMIT, window functions, list/struct types, UNNEST, strftime for dates. Use DuckDB SQL dialect.
-
+{dialect_section}
 {schema_prompt}
 {rag_section}
 USER QUESTION: {question}"""

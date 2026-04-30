@@ -22,53 +22,76 @@ _DEFAULT_OLLAMA_MODEL = os.environ.get("EXASOLCHAT_OLLAMA_MODEL", "qwen2.5-coder
 
 # ── Page config ──────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="ExasolChat",
+    page_title="⚡ ExasolChat",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Custom styles ────────────────────────────────────────────────────
+# ── Custom styles — Claude-inspired palette ───────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-    .block-container { padding-top: 1.5rem; max-width: 1200px; }
+    /* Global */
+    html, body, [class*="css"] { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+    .block-container { padding-top: 1.5rem; max-width: 1100px; }
+    code, pre, .stCode { font-family: 'JetBrains Mono', monospace !important; }
 
-    /* Override Streamlit defaults */
-    .stApp { font-family: 'DM Sans', sans-serif; }
-    code, .stCode { font-family: 'JetBrains Mono', monospace !important; }
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background-color: #1a1a1a;
+    }
+    [data-testid="stSidebar"] * { color: #e8e8e8 !important; }
+    [data-testid="stSidebar"] .stSelectbox label,
+    [data-testid="stSidebar"] .stTextInput label,
+    [data-testid="stSidebar"] .stTextArea label,
+    [data-testid="stSidebar"] .stNumberInput label { color: #a0a0a0 !important; font-size: 0.8rem !important; }
+
+    /* Chat messages — Claude style */
+    [data-testid="stChatMessage"] {
+        border-radius: 12px;
+        padding: 0.75rem 1rem;
+        margin-bottom: 0.5rem;
+    }
 
     /* Safety badges */
     .badge-safe {
-        display: inline-block; padding: 2px 10px; border-radius: 12px;
-        background: rgba(76, 175, 80, 0.15); color: #66bb6a;
-        font-size: 0.78rem; font-weight: 600;
+        display: inline-block; padding: 2px 10px; border-radius: 20px;
+        background: rgba(34, 197, 94, 0.12); color: #22c55e;
+        font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;
     }
     .badge-warn {
-        display: inline-block; padding: 2px 10px; border-radius: 12px;
-        background: rgba(255, 183, 77, 0.15); color: #ffa726;
-        font-size: 0.78rem; font-weight: 600;
+        display: inline-block; padding: 2px 10px; border-radius: 20px;
+        background: rgba(251, 146, 60, 0.12); color: #fb923c;
+        font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;
     }
     .badge-blocked {
-        display: inline-block; padding: 2px 10px; border-radius: 12px;
-        background: rgba(239, 83, 80, 0.15); color: #ef5350;
-        font-size: 0.78rem; font-weight: 600;
+        display: inline-block; padding: 2px 10px; border-radius: 20px;
+        background: rgba(239, 68, 68, 0.12); color: #ef4444;
+        font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;
     }
 
+    /* Feedback row */
+    .feedback-row { display: flex; gap: 6px; margin-top: 8px; }
+
     /* RAG indicator */
-    .rag-indicator {
-        font-size: 0.75rem; color: #90a4ae; margin-top: 4px;
+    .rag-indicator { font-size: 0.73rem; color: #9ca3af; margin-top: 6px; }
+
+    /* Column warning */
+    .col-warning {
+        background: rgba(251, 191, 36, 0.08); border-left: 3px solid #fbbf24;
+        padding: 6px 10px; border-radius: 4px; font-size: 0.82rem;
+        color: #d97706; margin-bottom: 6px;
     }
 
     /* Schema card */
-    .schema-table-name {
-        font-weight: 600; font-size: 0.92rem;
-        margin-bottom: 2px;
-    }
-    .schema-row-count {
-        font-size: 0.78rem; color: #78909c;
-    }
+    .schema-table-name { font-weight: 600; font-size: 0.9rem; color: #f97316; }
+    .schema-row-count  { font-size: 0.75rem; color: #6b7280; }
+
+    /* Accent: Anthropic orange */
+    .stButton > button[kind="primary"] { background: #f97316; border: none; }
+    .stButton > button[kind="primary"]:hover { background: #ea6c0a; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -80,37 +103,53 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "connected" not in st.session_state:
     st.session_state.connected = False
+if "feedback" not in st.session_state:
+    st.session_state.feedback = {}  # {question_hash: "up" | "down"}
+
+_VIZ_KEYWORDS = {"chart", "graph", "plot", "visuali", "diagram", "bar", "line", "pie", "scatter", "trend"}
+
+
+def _wants_viz(question: str) -> bool:
+    q = question.lower()
+    return any(k in q for k in _VIZ_KEYWORDS)
 
 
 # ── Helper functions ─────────────────────────────────────────────────
 
 def _render_chart(result: QueryResult):
-    """Render chart from QueryResult."""
     if result.chart_obj is None:
-        return
+        return False
     lib, chart = result.chart_obj
     if lib == "plotly":
         st.plotly_chart(chart, use_container_width=True)
     elif lib == "altair":
         st.altair_chart(chart, use_container_width=True)
+    return True
 
 
 def _render_result(r: QueryResult):
     """Render a QueryResult in a chat message."""
+    key = hash(r.question)
+
     # Error
     if r.error:
         st.error(r.error)
         if r.sql:
-            with st.expander("Generated SQL"):
+            with st.expander("🔍 Generated SQL"):
                 st.code(r.sql, language="sql")
         return
+
+    # Column disambiguation warnings
+    if r.column_warnings:
+        for w in r.column_warnings:
+            st.markdown(f'<div class="col-warning">{w}</div>', unsafe_allow_html=True)
 
     # Summary
     if r.summary:
         st.markdown(r.summary)
 
     # SQL expander — badge rendered inside, not in the label
-    with st.expander("Generated SQL", expanded=False):
+    with st.expander("🔍 Generated SQL", expanded=False):
         if r.safety.level == RiskLevel.SAFE:
             badge = '<span class="badge-safe">✓ Safe</span>'
         elif r.safety.level == RiskLevel.SUSPICIOUS:
@@ -123,32 +162,49 @@ def _render_result(r: QueryResult):
             st.caption(r.explanation)
         if r.rag_examples_used > 0:
             st.markdown(
-                f'<div class="rag-indicator">📚 Used {r.rag_examples_used} '
-                f'similar past queries as reference</div>',
+                f'<div class="rag-indicator">📚 Used {r.rag_examples_used} similar past quer{"y" if r.rag_examples_used == 1 else "ies"} as reference</div>',
                 unsafe_allow_html=True,
             )
 
     # Data + chart
     if r.data is not None and len(r.data) > 0:
-        # Chart first (more visually impactful)
-        _render_chart(r)
+        chart_rendered = _render_chart(r)
+        skip_table = chart_rendered and _wants_viz(r.question)
 
-        # Data table
-        st.dataframe(
-            r.data,
-            use_container_width=True,
-            height=min(400, 35 * len(r.data) + 50),
-        )
+        if not skip_table:
+            st.dataframe(
+                r.data,
+                use_container_width=True,
+                height=min(400, 35 * len(r.data) + 50),
+            )
 
-        # Download — key must be unique per result to avoid duplicate element ID error
-        col1, col2 = st.columns([1, 5])
-        with col1:
+        col_dl, col_gap = st.columns([1, 6])
+        with col_dl:
             csv = r.data.to_csv(index=False)
             st.download_button(
                 "📥 CSV", csv, "query_result.csv", "text/csv",
                 use_container_width=True,
-                key=f"dl_{hash(r.question)}",
+                key=f"dl_{key}",
             )
+
+    # ── Thumbs up / down ────────────────────────────────────────────
+    feedback = st.session_state.feedback.get(key)
+    c_up, c_down, c_gap = st.columns([1, 1, 9])
+    with c_up:
+        up_icon = "✅" if feedback == "up" else "👍"
+        if st.button(up_icon, key=f"up_{key}", help="Good answer — save to memory"):
+            if st.session_state.chat and r.sql:
+                try:
+                    st.session_state.chat.train(r.question, r.sql)
+                except Exception:
+                    pass
+            st.session_state.feedback[key] = "up"
+            st.rerun()
+    with c_down:
+        down_icon = "❌" if feedback == "down" else "👎"
+        if st.button(down_icon, key=f"dn_{key}", help="Bad answer"):
+            st.session_state.feedback[key] = "down"
+            st.rerun()
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────
