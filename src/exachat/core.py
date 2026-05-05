@@ -201,12 +201,13 @@ class ExasolChat:
             self._history.append(result)
             return result
 
-        # 4. Execute query
+        # 4. Rewrite normalized column names back to quoted originals, then execute
+        exec_sql = self.schema_context.denormalize_sql(sql)
         try:
-            df = self._db.execute_query(sql, self.max_rows)
+            df = self._db.execute_query(exec_sql, self.max_rows)
         except Exception as e:
             result = QueryResult(
-                question=question, sql=sql, safety=verdict,
+                question=question, sql=exec_sql, safety=verdict,
                 error=f"Query execution failed: {e}",
                 explanation=llm_resp.explanation,
                 kb_patterns_used=len(kb_patterns),
@@ -244,7 +245,7 @@ class ExasolChat:
             pass
 
         result = QueryResult(
-            question=question, sql=sql, safety=verdict,
+            question=question, sql=exec_sql, safety=verdict,
             data=df, summary=summary,
             chart_config=chart_config, chart_obj=chart_obj,
             explanation=llm_resp.explanation,

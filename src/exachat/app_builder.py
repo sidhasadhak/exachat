@@ -234,17 +234,18 @@ def render_builder(
     # ── Execute ───────────────────────────────────────────────────
     if run:
         sql = qb.build_sql(cfg, metrics_catalog)
+        exec_sql = chat.schema_context.denormalize_sql(sql)
         try:
-            verdict = validate_sql(sql)
+            verdict = validate_sql(exec_sql)
             if verdict.level == RiskLevel.BLOCKED:
                 st.error(f"Blocked: {verdict.reason}")
             else:
-                df = chat._db.execute_query(sql, cfg["limit"])
-                st.session_state.builder_result = {"sql": sql, "df": df}
+                df = chat._db.execute_query(exec_sql, cfg["limit"])
+                st.session_state.builder_result = {"sql": exec_sql, "df": df}
                 st.session_state.builder_scroll = True
         except Exception as e:
             st.error(f"Query failed: {e}")
-            st.code(sql, language="sql")
+            st.code(exec_sql, language="sql")
             st.session_state.pop("builder_result", None)
 
     # Auto-scroll to results after Run

@@ -22,6 +22,17 @@ _DATE_PATTERNS = [
 ]
 
 
+def _norm_col_name(name: str) -> str:
+    """Normalize a raw DB column name: strip, lowercase, whitespace → underscore.
+
+    Examples:  "Order Date"  → "order_date"
+               "Customer ID" → "customer_id"
+               "  Sales  "   → "sales"
+               "profit"      → "profit"   (unchanged)
+    """
+    return re.sub(r"\s+", "_", name.strip()).lower()
+
+
 def _detect_date_format(samples: list) -> Optional[str]:
     """Return a human-readable description of the date format, or None."""
     str_samples = [str(s) for s in samples if s is not None][:5]
@@ -33,12 +44,17 @@ def _detect_date_format(samples: list) -> Optional[str]:
 
 @dataclass
 class ColumnInfo:
-    name: str
+    name: str           # normalized: "order_date"
     type: str
     nullable: bool
     primary_key: bool
     foreign_key: Optional[str] = None
     comment: Optional[str] = None
+    original_name: str = ""   # raw DB name: "Order Date"
+
+    def __post_init__(self):
+        if not self.original_name:
+            self.original_name = self.name
 
 
 @dataclass
@@ -95,6 +111,34 @@ class SchemaContext:
     @property
     def table_names(self) -> list[str]:
         return [t.name for t in self.tables]
+
+    def col_name_map(self) -> dict[str, str]:
+        """Return {normalized_name: original_db_name} for every column that changed."""
+        return {
+            c.name: c.original_name
+            for t in self.tables
+            for c in t.columns
+            if c.name != c.original_name
+        }
+
+    def denormalize_sql(self, sql: str) -> str:
+        """Rewrite normalized column names in LLM/builder SQL to quoted originals.
+
+        Two patterns handled:
+          "order_date"  →  "Order Date"   (builder always quotes; swap the name inside)
+          order_date    →  "Order Date"   (LLM wrote unquoted; add quotes + original name)
+
+        The unquoted replacement is only applied when the original name contained a
+        space (those MUST be quoted in SQL) to avoid clashing with SQL keywords.
+        """
+        mapping = self.col_name_map()
+        for norm, orig in mapping.items():
+            # quoted normalized → quoted original  (handles builder output)
+            sql = sql.replace(f'"{norm}"', f'"{orig}"')
+            # unquoted normalized → quoted original  (handles LLM output, only for names with spaces)
+            if " " in orig:
+                sql = re.sub(rf"\b{re.escape(norm)}\b", f'"{orig}"', sql)
+        return sql
 
 
 # ─── Exasol introspection via pyexasol ──────────────────────────────
@@ -185,16 +229,18 @@ def introspect_exasol(
 
         columns = []
         for col_row in cols_result:
+            raw = col_row[0]
             columns.append(ColumnInfo(
-                name=col_row[0],
+                name=_norm_col_name(raw),
+                original_name=raw,
                 type=col_row[1],
                 nullable=col_row[2],
-                primary_key=col_row[0] in pk_cols,
-                foreign_key=fk_map.get(col_row[0]),
+                primary_key=raw in pk_cols,
+                foreign_key=fk_map.get(raw),
                 comment=col_row[3],
             ))
 
-        # Sample values
+        # Sample values (keys normalized to match col.name)
         sample_values: dict[str, list] = {}
         if sample_rows > 0 and row_count and row_count > 0:
             try:
@@ -207,7 +253,7 @@ def introspect_exasol(
                 for i, cn in enumerate(col_names):
                     vals = [row[i] for row in sample_data if row[i] is not None]
                     if vals:
-                        sample_values[cn] = vals[:5]
+                        sample_values[_norm_col_name(cn)] = vals[:5]
             except Exception:
                 pass
 
@@ -316,12 +362,14 @@ def introspect_duckdb(
 
         columns = []
         for col_row in cols_result:
+            raw = col_row[0]
             columns.append(ColumnInfo(
-                name=col_row[0],
+                name=_norm_col_name(raw),
+                original_name=raw,
                 type=col_row[1],
                 nullable=col_row[2] == "YES",
-                primary_key=col_row[0] in pk_cols,
-                foreign_key=fk_map.get(col_row[0]),
+                primary_key=raw in pk_cols,
+                foreign_key=fk_map.get(raw),
                 comment=None,  # filled in after sample values are known
             ))
 
@@ -334,7 +382,7 @@ def introspect_duckdb(
         except Exception:
             pass
 
-        # Sample values + date format detection
+        # Sample values + date format detection (keys normalized to match col.name)
         sample_values: dict[str, list] = {}
         if sample_rows > 0:
             try:
@@ -346,7 +394,7 @@ def introspect_duckdb(
                 for col in sample_df.columns:
                     vals = sample_df[col].dropna().tolist()[:5]
                     if vals:
-                        sample_values[col] = vals
+                        sample_values[_norm_col_name(col)] = vals
             except Exception:
                 pass
 
@@ -355,7 +403,7 @@ def introspect_duckdb(
             if col.comment:
                 continue
             is_date_type = any(k in col.type.upper() for k in ("DATE", "TIME", "STAMP"))
-            is_date_name = any(k in col.name.lower() for k in ("date", "time", "day", "month", "year"))
+            is_date_name = any(k in col.name for k in ("date", "time", "day", "month", "year"))
             if (is_date_type or is_date_name) and col.name in sample_values:
                 fmt = _detect_date_format(sample_values[col.name])
                 if fmt:
@@ -411,7 +459,8 @@ def introspect_sqlalchemy(
 
         columns = [
             ColumnInfo(
-                name=col["name"],
+                name=_norm_col_name(col["name"]),
+                original_name=col["name"],
                 type=str(col["type"]),
                 nullable=col.get("nullable", True),
                 primary_key=col["name"] in pk_cols,
@@ -430,7 +479,7 @@ def introspect_sqlalchemy(
         except Exception:
             pass
 
-        # Sample values
+        # Sample values (keys normalized to match col.name)
         sample_values: dict[str, list] = {}
         if sample_rows > 0:
             try:
@@ -444,7 +493,7 @@ def introspect_sqlalchemy(
                     for i, cn in enumerate(col_names):
                         vals = [row[i] for row in rows if row[i] is not None]
                         if vals:
-                            sample_values[cn] = vals[:5]
+                            sample_values[_norm_col_name(cn)] = vals[:5]
             except Exception:
                 pass
 
