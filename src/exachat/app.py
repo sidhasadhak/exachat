@@ -199,7 +199,7 @@ def _render_chart_dynamic(
         return False
 
 
-def _render_result(r: QueryResult):
+def _render_result(r: QueryResult, elapsed: float | None = None):
     key = hash(r.question)
 
     if r.error:
@@ -232,6 +232,12 @@ def _render_result(r: QueryResult):
                 f'<div class="kb-indicator">📖 {r.kb_patterns_used} KB pattern{"s" if r.kb_patterns_used != 1 else ""} guided this query</div>',
                 unsafe_allow_html=True,
             )
+
+    if elapsed is not None:
+        st.markdown(
+            f'<div style="font-size:0.88rem;color:#6b7280;margin:4px 0 12px;font-weight:500;">⏱ {elapsed:.1f}s</div>',
+            unsafe_allow_html=True,
+        )
 
     if r.data is not None and len(r.data) > 0:
         df = r.data
@@ -578,17 +584,17 @@ with tab_ask:
                         st.rerun()
         st.divider()
 
-    # Render conversation history
+    # Render conversation history — always drives the display order
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             if msg["role"] == "user":
                 st.markdown(msg["content"])
             elif "result" in msg:
-                _render_result(msg["result"])
+                _render_result(msg["result"], elapsed=msg.get("elapsed"))
             else:
                 st.markdown(msg.get("content", ""))
 
-    # Handle pending question (from follow-up or explore button click)
+    # Collect next question (typed or from a button)
     pending = st.session_state.get("pending_question")
     if pending:
         st.session_state.pending_question = None
@@ -597,22 +603,20 @@ with tab_ask:
     question = typed or pending
 
     if question:
+        # Store the user turn, process, store the assistant turn, then rerun.
+        # This keeps the chat_input anchored at the bottom and ensures each
+        # follow-up appears as a new entry below the previous one.
         st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Generating SQL..."):
-                _t0 = time.perf_counter()
-                result = chat_engine.ask(question)
-                _elapsed = time.perf_counter() - _t0
-            _render_result(result)
-            st.markdown(
-                f'<div style="font-size:0.7rem;color:#4b5563;margin-top:6px;">⏱ {_elapsed:.1f}s</div>',
-                unsafe_allow_html=True,
-            )
-
-        st.session_state.messages.append({"role": "assistant", "result": result})
+        with st.spinner("Thinking…"):
+            _t0 = time.perf_counter()
+            result = chat_engine.ask(question)
+            _elapsed = time.perf_counter() - _t0
+        st.session_state.messages.append({
+            "role": "assistant",
+            "result": result,
+            "elapsed": _elapsed,
+        })
+        st.rerun()
 
 # ── BUILD tab ────────────────────────────────────────────────────────
 with tab_build:
