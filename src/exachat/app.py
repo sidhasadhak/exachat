@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 from dotenv import load_dotenv
 
+from exachat.app_builder import render_builder, render_metrics_tab
 from exachat.core import ExasolChat, QueryResult
 from exachat.connection import ConnectionConfig
 from exachat.llm import OllamaBackend, OpenAICompatibleBackend
@@ -14,10 +15,11 @@ from exachat.safety import RiskLevel
 
 load_dotenv()
 
-_DEFAULT_DUCKDB_PATH  = os.environ.get("EXACHAT_DUCKDB_PATH", "")
-_DEFAULT_OLLAMA_URL   = os.environ.get("EXACHAT_OLLAMA_URL", "http://localhost:11434")
-_DEFAULT_OLLAMA_MODEL = os.environ.get("EXACHAT_OLLAMA_MODEL", "qwen2.5-coder:7b")
-_DEFAULT_KB_PATH      = os.environ.get("EXACHAT_KB_PATH", "")
+_DEFAULT_DUCKDB_PATH    = os.environ.get("EXACHAT_DUCKDB_PATH", "")
+_DEFAULT_OLLAMA_URL     = os.environ.get("EXACHAT_OLLAMA_URL", "http://localhost:11434")
+_DEFAULT_OLLAMA_MODEL   = os.environ.get("EXACHAT_OLLAMA_MODEL", "qwen2.5-coder:7b")
+_DEFAULT_KB_PATH        = os.environ.get("EXACHAT_KB_PATH", "")
+_DEFAULT_METRICS_PATH   = os.environ.get("EXACHAT_METRICS_PATH", "")
 
 
 # ── Page config ──────────────────────────────────────────────────────
@@ -105,6 +107,8 @@ if "explore_questions" not in st.session_state:
     st.session_state.explore_questions = []
 if "pending_question" not in st.session_state:
     st.session_state.pending_question = None
+if "open_in_builder" not in st.session_state:
+    st.session_state.open_in_builder = None
 
 _VIZ_KEYWORDS = {"chart", "graph", "plot", "visuali", "diagram", "bar", "line", "pie", "scatter", "trend"}
 
@@ -172,7 +176,7 @@ def _render_result(r: QueryResult):
                 height=min(400, 35 * len(r.data) + 50),
             )
 
-        col_dl, col_gap = st.columns([1, 6])
+        col_dl, col_bld, col_gap = st.columns([1, 1, 5])
         with col_dl:
             csv = r.data.to_csv(index=False)
             st.download_button(
@@ -180,6 +184,12 @@ def _render_result(r: QueryResult):
                 use_container_width=True,
                 key=f"dl_{key}",
             )
+        with col_bld:
+            if st.button("📊 Builder", key=f"bld_{key}",
+                         use_container_width=True,
+                         help="Open this query in the visual builder"):
+                st.session_state.open_in_builder = r.sql
+                st.rerun()
 
     # Follow-up suggestions
     if r.followups:
@@ -252,6 +262,21 @@ with st.sidebar:
             "Path to a folder of additional JSON pattern files.\n"
             "Built-in patterns are always loaded automatically.\n"
             "Set EXACHAT_KB_PATH in .env to pre-fill."
+        ),
+    )
+
+    st.divider()
+
+    # --- Metrics catalog ---
+    st.markdown("#### Metrics Catalog")
+    metrics_path_input = st.text_input(
+        "Metrics directory (optional)",
+        value=_DEFAULT_METRICS_PATH,
+        placeholder="~/.exachat/metrics/",
+        help=(
+            "Folder where metric JSON files are stored.\n"
+            "Defaults to ~/.exachat/metrics/.\n"
+            "Set EXACHAT_METRICS_PATH in .env to pre-fill."
         ),
     )
 
@@ -336,6 +361,7 @@ with st.sidebar:
                     max_rows=max_rows,
                     kb_path=kb_path_input.strip() or None,
                     chart_library=chart_lib,
+                    metrics_path=metrics_path_input.strip() or None,
                 )
 
             st.session_state.chat = chat
@@ -445,49 +471,70 @@ if not st.session_state.connected:
     st.stop()
 
 
-# ── Chat interface ───────────────────────────────────────────────────
+# ── Tabbed interface ─────────────────────────────────────────────────
 chat_engine: ExasolChat = st.session_state.chat
 
-# Explore question grid — shown only before the first message
-if not st.session_state.messages and st.session_state.explore_questions:
-    st.markdown("#### Where do you want to start?")
-    eq = st.session_state.explore_questions
-    row1, row2 = eq[:3], eq[3:]
-    for row in [row1, row2]:
-        cols = st.columns(len(row))
-        for col, q in zip(cols, row):
-            with col:
-                if st.button(q, use_container_width=True, key=f"eq_{hash(q)}"):
-                    st.session_state.pending_question = q
-                    st.rerun()
-    st.divider()
+tab_ask, tab_build, tab_metrics = st.tabs(["💬 Ask", "📊 Build", "📐 Metrics"])
 
-# Render conversation history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        if msg["role"] == "user":
-            st.markdown(msg["content"])
-        elif "result" in msg:
-            _render_result(msg["result"])
-        else:
-            st.markdown(msg.get("content", ""))
+# ── ASK tab ──────────────────────────────────────────────────────────
+with tab_ask:
+    # Explore question grid — shown only before the first message
+    if not st.session_state.messages and st.session_state.explore_questions:
+        st.markdown("#### Where do you want to start?")
+        eq = st.session_state.explore_questions
+        row1, row2 = eq[:3], eq[3:]
+        for row in [row1, row2]:
+            cols = st.columns(len(row))
+            for col, q in zip(cols, row):
+                with col:
+                    if st.button(q, use_container_width=True, key=f"eq_{hash(q)}"):
+                        st.session_state.pending_question = q
+                        st.rerun()
+        st.divider()
 
-# Handle pending question (from follow-up or explore button click)
-pending = st.session_state.get("pending_question")
-if pending:
-    st.session_state.pending_question = None
+    # Render conversation history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            if msg["role"] == "user":
+                st.markdown(msg["content"])
+            elif "result" in msg:
+                _render_result(msg["result"])
+            else:
+                st.markdown(msg.get("content", ""))
 
-typed = st.chat_input("Ask a question about your data...")
-question = typed or pending
+    # Handle pending question (from follow-up or explore button click)
+    pending = st.session_state.get("pending_question")
+    if pending:
+        st.session_state.pending_question = None
 
-if question:
-    st.session_state.messages.append({"role": "user", "content": question})
-    with st.chat_message("user"):
-        st.markdown(question)
+    typed = st.chat_input("Ask a question about your data...")
+    question = typed or pending
 
-    with st.chat_message("assistant"):
-        with st.spinner("Generating SQL..."):
-            result = chat_engine.ask(question)
-        _render_result(result)
+    if question:
+        st.session_state.messages.append({"role": "user", "content": question})
+        with st.chat_message("user"):
+            st.markdown(question)
 
-    st.session_state.messages.append({"role": "assistant", "result": result})
+        with st.chat_message("assistant"):
+            with st.spinner("Generating SQL..."):
+                result = chat_engine.ask(question)
+            _render_result(result)
+
+        st.session_state.messages.append({"role": "assistant", "result": result})
+
+# ── BUILD tab ────────────────────────────────────────────────────────
+with tab_build:
+    # If "Open in Builder" was clicked in the Ask tab, seed the builder
+    open_sql = st.session_state.pop("open_in_builder", None)
+    if open_sql and chat_engine.builder:
+        seeded = chat_engine.builder.seed_from_sql(open_sql)
+        # Only seed if the table was found and it exists in the schema
+        if seeded.get("table") and seeded["table"] in chat_engine.builder.table_names():
+            st.session_state.builder = seeded
+            st.session_state.pop("builder_result", None)
+
+    render_builder(chat_engine, chat_engine.builder, chat_engine.metrics_catalog)
+
+# ── METRICS tab ──────────────────────────────────────────────────────
+with tab_metrics:
+    render_metrics_tab(chat_engine.metrics_catalog)

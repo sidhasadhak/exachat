@@ -13,10 +13,12 @@ from typing import Optional
 
 import pandas as pd
 
+from exachat.builder import QueryBuilder
 from exachat.charts import auto_chart
 from exachat.connection import ConnectionConfig, DatabaseConnection
 from exachat.kb import KnowledgeBase
 from exachat.llm import LLMBackend, LLMResponse, OllamaBackend
+from exachat.metrics import MetricsCatalog
 from exachat.safety import RiskLevel, SafetyVerdict, sanitize_sql, validate_sql
 from exachat.schema import (
     SchemaContext,
@@ -71,6 +73,7 @@ class ExasolChat:
         max_rows: int = 5000,
         kb_path: Optional[str] = None,
         chart_library: str = "auto",
+        metrics_path: Optional[str] = None,
     ):
         # Connection
         if isinstance(connection, str):
@@ -94,6 +97,9 @@ class ExasolChat:
         self.kb = KnowledgeBase()
         if kb_path:
             self.kb.load_dir(kb_path)
+
+        # Metrics catalog (persisted JSON; always initialised)
+        self.metrics_catalog = MetricsCatalog(metrics_path)
 
         # Schema introspection
         if self._db.is_exasol:
@@ -120,6 +126,9 @@ class ExasolChat:
 
         if extra_context:
             self.schema_context.extra_context = extra_context
+
+        # Visual query builder — exposes schema introspection to the UI
+        self.builder = QueryBuilder(self.schema_context)
 
         self._history: list[QueryResult] = []
 
@@ -158,9 +167,15 @@ class ExasolChat:
             for r in self._history[-3:]
             if r.sql and not r.error
         ]
+
+        # Build schema prompt; append metrics catalog if any are defined
+        schema_prompt = self.schema_prompt
+        if self.metrics_catalog and self.metrics_catalog.count > 0:
+            schema_prompt += "\n\n" + self.metrics_catalog.format_for_prompt()
+
         try:
             llm_resp: LLMResponse = self.llm.generate_sql(
-                self.schema_prompt, question, kb_context,
+                schema_prompt, question, kb_context,
                 history=recent_history or None,
             )
         except Exception as e:
