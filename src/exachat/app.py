@@ -93,30 +93,28 @@ st.markdown("""
     .stButton > button[kind="primary"] { background: #f97316; border: none; }
     .stButton > button[kind="primary"]:hover { background: #ea6c0a; }
 
-    /* Tab labels — make them clearly visible */
-    [data-testid="stTabs"] [data-baseweb="tab-list"] {
-        gap: 4px;
-        border-bottom: 1px solid #2d2d2d;
-    }
-    [data-testid="stTabs"] [data-baseweb="tab"] {
-        color: #9ca3af !important;
+    /* Tab labels — force visibility regardless of Streamlit version */
+    button[data-baseweb="tab"] {
+        color: #c9c9c9 !important;
         font-size: 0.92rem !important;
         font-weight: 500 !important;
-        padding: 8px 20px !important;
-        border-radius: 6px 6px 0 0 !important;
-        background: transparent !important;
     }
-    [data-testid="stTabs"] [data-baseweb="tab"]:hover {
-        color: #e8e8e8 !important;
-        background: rgba(255,255,255,0.05) !important;
+    button[data-baseweb="tab"]:hover {
+        color: #ffffff !important;
     }
-    [data-testid="stTabs"] [aria-selected="true"] {
+    button[data-baseweb="tab"][aria-selected="true"] {
         color: #f97316 !important;
-        border-bottom: 2px solid #f97316 !important;
-        background: transparent !important;
     }
-    [data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+    [data-baseweb="tab-highlight"] {
         background-color: #f97316 !important;
+    }
+    [data-baseweb="tab-border"] {
+        background-color: #2d2d2d !important;
+    }
+    /* Catch-all: any p/span inside a tab button */
+    button[data-baseweb="tab"] p,
+    button[data-baseweb="tab"] span {
+        color: inherit !important;
     }
 </style>
 """, unsafe_allow_html=True)
