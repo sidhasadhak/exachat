@@ -237,7 +237,11 @@ def render_builder(
         sql = qb.build_sql(cfg, metrics_catalog)
         exec_sql = chat.schema_context.denormalize_sql(sql)
         try:
-            verdict = validate_sql(exec_sql)
+            verdict = validate_sql(
+                exec_sql,
+                allowed_schemas=getattr(chat, "_allowed_schemas", None),
+                allowed_tables=getattr(chat, "_allowed_tables", None),
+            )
             if verdict.level == RiskLevel.BLOCKED:
                 st.error(f"Blocked: {verdict.reason}")
             else:

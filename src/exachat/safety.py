@@ -147,25 +147,42 @@ def _check_object_access(
     allowed_schemas: Optional[set[str]],
     allowed_tables: Optional[set[str]],
 ) -> Optional[str]:
-    """Check that only allowed schemas/tables appear in FROM and JOIN clauses."""
-    # Extract table references: schema.table or just table
-    # Matches: FROM schema.table, JOIN schema.table, FROM table, JOIN table
-    table_refs = re.findall(
-        r"(?:FROM|JOIN)\s+([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)?)(?:\s|$|,)",
-        sql,
+    """Check that only allowed schemas/tables appear in FROM and JOIN clauses.
+
+    Handles both unquoted (FROM orders) and double-quoted (FROM "orders")
+    identifiers, as well as schema-qualified refs (FROM sales.orders or
+    FROM "sales"."orders").
+    """
+    # Each identifier is either "quoted" or unquoted_word
+    _ident = r'"[^"]*"|[A-Za-z_]\w*'
+    # Full ref: ident or ident.ident
+    _ref   = rf'({_ident})(?:\.({_ident}))?'
+    # Must follow FROM / JOIN keyword + whitespace
+    pattern = re.compile(
+        rf'(?:FROM|JOIN)\s+{_ref}(?=\s|,|\)|$)',
         re.IGNORECASE,
     )
 
-    for ref in table_refs:
-        parts = ref.split(".")
-        if len(parts) == 2:
-            schema, table = parts[0].upper(), parts[1].upper()
+    def _bare(tok: Optional[str]) -> str:
+        """Strip surrounding double-quotes and uppercase."""
+        if not tok:
+            return ""
+        return tok.strip('"').upper()
+
+    for m in pattern.finditer(sql):
+        first, second = m.group(1), m.group(2)
+
+        if second:
+            # schema.table form
+            schema = _bare(first)
+            table  = _bare(second)
             if allowed_schemas and schema not in {s.upper() for s in allowed_schemas}:
                 return f"schema '{schema}' not in allowed list"
             if allowed_tables and table not in {t.upper() for t in allowed_tables}:
                 return f"table '{schema}.{table}' not in allowed list"
-        elif len(parts) == 1:
-            table = parts[0].upper()
+        else:
+            # bare table form
+            table = _bare(first)
             if allowed_tables and table not in {t.upper() for t in allowed_tables}:
                 return f"table '{table}' not in allowed list"
 

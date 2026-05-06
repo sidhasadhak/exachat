@@ -101,19 +101,27 @@ class ExasolChat:
         # Metrics catalog (persisted JSON; always initialised)
         self.metrics_catalog = MetricsCatalog(metrics_path)
 
+        # Merge explicit include_tables with allowed_tables: if allowed_tables
+        # is set and include_tables is not, restrict introspection to the
+        # allowed set so the schema prompt, field palette, and sidebar only
+        # surface tables the user is actually permitted to query.
+        effective_include = include_tables
+        if not effective_include and self._allowed_tables:
+            effective_include = list(self._allowed_tables)
+
         # Schema introspection
         if self._db.is_exasol:
             self.schema_context = introspect_exasol(
                 self._db.pyexasol_conn,
                 schema=schema or self._config.exasol_schema,
-                include_tables=include_tables,
+                include_tables=effective_include,
                 exclude_tables=exclude_tables,
             )
         elif self._db.is_duckdb:
             self.schema_context = introspect_duckdb(
                 self._db.duckdb_conn,
                 schema=schema,
-                include_tables=include_tables,
+                include_tables=effective_include,
                 exclude_tables=exclude_tables,
             )
         else:
