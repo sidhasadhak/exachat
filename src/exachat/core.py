@@ -19,7 +19,7 @@ import pandas as pd
 from exachat.builder import QueryBuilder
 from exachat.charts import auto_chart
 from exachat.connection import ConnectionConfig, DatabaseConnection
-from exachat.kb import KnowledgeBase
+from exachat.kb import KnowledgeBase, SchemaIndex, build_embedding_fn
 from exachat.llm import LLMBackend, LLMResponse, OllamaBackend
 from exachat.metrics import MetricsCatalog
 from exachat.safety import RiskLevel, SafetyVerdict, sanitize_sql, validate_sql
@@ -77,6 +77,9 @@ class ExasolChat:
         kb_path: Optional[str] = None,
         chart_library: str = "auto",
         metrics_path: Optional[str] = None,
+        embedding_backend: str = "fastembed",
+        embedding_url: str = "",
+        embedding_model: str = "nomic-ai/nomic-embed-text-v1.5",
     ):
         # Connection
         if isinstance(connection, str):
@@ -96,10 +99,23 @@ class ExasolChat:
         self._allowed_schemas = set(allowed_schemas) if allowed_schemas else None
         self._allowed_tables = set(allowed_tables) if allowed_tables else None
 
+        # Build the embedding function once and share it between the KB and the
+        # schema index so both collections use the same model and vector space.
+        # Falls back to bag-of-words silently if the server is unreachable.
+        _ef = build_embedding_fn(
+            backend=embedding_backend,
+            url=embedding_url,
+            model=embedding_model,
+        )
+
         # Knowledge base (built-ins always loaded; extra dir optional)
-        self.kb = KnowledgeBase()
+        self.kb = KnowledgeBase(ef=_ef)
         if kb_path:
             self.kb.load_dir(kb_path)
+
+        # Schema index — built after introspection below; declared here so the
+        # attribute always exists even if introspection fails.
+        self._schema_index = SchemaIndex(ef=_ef)
 
         # Metrics catalog (persisted JSON; always initialised)
         self.metrics_catalog = MetricsCatalog(metrics_path)
@@ -137,6 +153,14 @@ class ExasolChat:
 
         if extra_context:
             self.schema_context.extra_context = extra_context
+
+        # Build schema index for large-schema retrieval
+        # Uses the same fingerprint as the question cache so both stay in sync.
+        try:
+            fp = self._schema_fingerprint()
+            self._schema_index.index(self.schema_context.tables, fp)
+        except Exception:
+            pass  # index failure must never block a connection
 
         # Visual query builder — exposes schema introspection to the UI
         self.builder = QueryBuilder(self.schema_context)
@@ -179,8 +203,20 @@ class ExasolChat:
             if r.sql and not r.error
         ]
 
-        # Build schema prompt; append metrics catalog if any are defined
-        schema_prompt = self.schema_prompt
+        # Build schema prompt — use retrieved subset for large schemas, full
+        # schema for small ones.  The index is a transparent pass-through when
+        # the schema has <= SchemaIndex.THRESHOLD tables.
+        if self._schema_index.active:
+            relevant_tables = self._schema_index.retrieve(question)
+            _filtered_ctx = SchemaContext(
+                tables=relevant_tables,
+                dialect=self.schema_context.dialect,
+                extra_context=self.schema_context.extra_context,
+            )
+            schema_prompt = _filtered_ctx.to_prompt()
+        else:
+            schema_prompt = self.schema_prompt
+
         if self.metrics_catalog and self.metrics_catalog.count > 0:
             schema_prompt += "\n\n" + self.metrics_catalog.format_for_prompt()
 

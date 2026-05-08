@@ -1,6 +1,7 @@
 """LLM backends for text-to-SQL generation.
 
-Supports Ollama (default) and any OpenAI-compatible API (LM Studio, vLLM, etc.).
+Supports Ollama (default), any OpenAI-compatible API (LM Studio, vLLM, etc.),
+and Apple Silicon MLX-LM server.
 """
 
 from __future__ import annotations
@@ -23,6 +24,10 @@ class LLMResponse:
 
 class LLMBackend(ABC):
     """Abstract LLM backend."""
+
+    def ping(self) -> tuple[bool, str]:
+        """Return (reachable, message). Override in each backend."""
+        return False, "ping not implemented"
 
     @abstractmethod
     def generate_sql(
@@ -245,18 +250,34 @@ class OllamaBackend(LLMBackend):
         self.timeout = timeout
         self._client = httpx.Client(timeout=timeout)
 
+    def ping(self) -> tuple[bool, str]:
+        try:
+            r = httpx.get(f"{self.base_url}/api/tags", timeout=3.0)
+            return True, f"Ollama reachable ({self.model})"
+        except httpx.ConnectError:
+            return False, f"Ollama not running at {self.base_url} — start it with: ollama serve"
+        except Exception as e:
+            return False, str(e)
+
     def _chat(self, prompt: str, temperature: float = 0.1) -> str:
-        resp = self._client.post(
-            f"{self.base_url}/api/generate",
-            json={
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": temperature},
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()["response"]
+        try:
+            resp = self._client.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": temperature},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["response"]
+        except httpx.ConnectError:
+            raise ConnectionError(
+                f"Ollama server not reachable at {self.base_url}.\n"
+                f"Start it with:  ollama serve\n"
+                f"Then ensure the model is pulled:  ollama pull {self.model}"
+            )
 
     def generate_sql(
         self, schema_prompt: str, question: str,
@@ -292,6 +313,9 @@ class OllamaBackend(LLMBackend):
 class OpenAICompatibleBackend(LLMBackend):
     """Any OpenAI-compatible API (LM Studio, vLLM, text-gen-webui, LocalAI, etc.)."""
 
+    # Subclasses may override to customise identity shown in errors.
+    _backend_name: str = "OpenAI-compatible"
+
     def __init__(
         self,
         base_url: str = "http://localhost:1234/v1",
@@ -304,18 +328,34 @@ class OpenAICompatibleBackend(LLMBackend):
         self.api_key = api_key
         self._client = httpx.Client(timeout=timeout)
 
+    def ping(self) -> tuple[bool, str]:
+        try:
+            r = httpx.get(f"{self.base_url}/models", timeout=3.0,
+                          headers={"Authorization": f"Bearer {self.api_key}"})
+            return True, f"{self._backend_name} reachable ({self.model})"
+        except httpx.ConnectError:
+            return False, f"{self._backend_name} server not running at {self.base_url}"
+        except Exception as e:
+            return False, str(e)
+
     def _chat(self, prompt: str, temperature: float = 0.1) -> str:
-        resp = self._client.post(
-            f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        try:
+            resp = self._client.post(
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": temperature,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        except httpx.ConnectError:
+            raise ConnectionError(
+                f"{self._backend_name} server not reachable at {self.base_url}.\n"
+                f"Make sure the server is running and the URL is correct."
+            )
 
     def generate_sql(
         self, schema_prompt: str, question: str,
@@ -346,3 +386,88 @@ class OpenAICompatibleBackend(LLMBackend):
     def generate_explore_questions(self, schema_prompt: str, profile: str) -> list[str]:
         raw = self._chat(self._build_explore_prompt(schema_prompt, profile), 0.4)
         return self._extract_json_list(raw)
+
+
+class MLXBackend(OpenAICompatibleBackend):
+    """Apple Silicon MLX-LM server backend.
+
+    MLX-LM runs models natively on Apple Silicon via Metal and exposes an
+    OpenAI-compatible HTTP server, so this backend is a thin wrapper around
+    OpenAICompatibleBackend with MLX-appropriate defaults.
+
+    Setup (one-time):
+        pip install exachat[mlx]
+
+    Start server before connecting exachat:
+        python3 -m mlx_lm.server \\
+            --model mlx-community/Qwen3-8B-4bit \\
+            --port 8080
+
+    Any model from the mlx-community HuggingFace organisation works, e.g.:
+        mlx-community/Qwen3-8B-4bit                      (default, ~5 GB)
+        mlx-community/Qwen3-8B-8bit                      (~9 GB, higher quality)
+        mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit  (~18 GB, MoE code-specialist)
+
+    Note: Qwen3 is a thinking model. This backend appends /no_think to every
+    prompt to disable chain-of-thought reasoning — you get direct SQL answers
+    instead of long reasoning traces, which is faster and more reliable for
+    text-to-SQL tasks.
+    """
+
+    _backend_name: str = "MLX"
+
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8080/v1",
+        model: str = "mlx-community/Qwen3-8B-4bit",
+        api_key: str = "not-needed",
+        timeout: float = 180.0,
+    ):
+        super().__init__(base_url=base_url, model=model, api_key=api_key, timeout=timeout)
+
+    def ping(self) -> tuple[bool, str]:
+        try:
+            httpx.get(f"{self.base_url}/models", timeout=3.0)
+            return True, f"MLX server reachable ({self.model})"
+        except httpx.ConnectError:
+            return (
+                False,
+                f"MLX server not running at {self.base_url}.\n"
+                f"Start it with:\n"
+                f"  python3 -m mlx_lm.server --model {self.model} --port 8080",
+            )
+        except Exception as e:
+            return False, str(e)
+
+    def _chat(self, prompt: str, temperature: float = 0.1) -> str:
+        # Append /no_think to disable Qwen3's chain-of-thought reasoning mode.
+        # Without this, the model outputs a long <think>...</think> block before
+        # the actual answer, which breaks SQL extraction and wastes time.
+        no_think_prompt = prompt + " /no_think"
+        try:
+            resp = self._client.post(
+                f"{self.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": no_think_prompt}],
+                    "temperature": temperature,
+                },
+            )
+            resp.raise_for_status()
+            msg = resp.json()["choices"][0]["message"]
+            # Qwen3 thinking models may return content in "reasoning_content" or
+            # "reasoning" when in thinking mode. Prefer "content", fall back gracefully.
+            return (
+                msg.get("content")
+                or msg.get("reasoning_content")
+                or msg.get("reasoning")
+                or ""
+            )
+        except httpx.ConnectError:
+            raise ConnectionError(
+                f"MLX server not reachable at {self.base_url}.\n"
+                f"Open a terminal and run:\n"
+                f"  python3 -m mlx_lm.server --model {self.model} --port 8080\n"
+                f"Then try again."
+            )

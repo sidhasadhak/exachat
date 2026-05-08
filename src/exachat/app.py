@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import platform
 import time
 import streamlit as st
 import pandas as pd
@@ -11,7 +13,8 @@ from dotenv import load_dotenv
 from exachat.app_builder import render_builder, render_metrics_tab
 from exachat.core import ExasolChat, QueryResult
 from exachat.connection import ConnectionConfig
-from exachat.llm import OllamaBackend, OpenAICompatibleBackend
+from exachat.llm import OllamaBackend, OpenAICompatibleBackend, MLXBackend
+from exachat.setup_wizard import load_config as _load_wizard_config
 from exachat.safety import RiskLevel
 
 load_dotenv()
@@ -648,16 +651,17 @@ def _build_chart_figure(
     barmode = "group" if len(all_cols) > 1 else "relative"
     layout: dict = dict(
         barmode=barmode,
-        margin=dict(t=44, b=80),
+        margin=dict(t=44, b=40, l=60),
         legend_title_text="",
         legend=dict(
             orientation="h",
-            yanchor="top", y=-0.18,
-            xanchor="center", x=0.5,
+            yanchor="bottom", y=1.02,
+            xanchor="left", x=0.0,
         ),
         uniformtext_minsize=8,
         uniformtext_mode="hide",
     )
+
     if y2_cols:
         layout["yaxis"]  = dict(title=", ".join(y1_cols) if y1_cols else "")
         layout["yaxis2"] = dict(
@@ -831,12 +835,49 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
         # ── Data table (always shown so sorted data is visible) ───
         st.dataframe(df, use_container_width=True, height=min(400, 35 * len(df) + 50))
 
-        col_dl, col_gap = st.columns([1, 6])
+        col_dl, col_nav = st.columns([1, 5])
         with col_dl:
             st.download_button(
                 "📥 CSV", df.to_csv(index=False), "query_result.csv", "text/csv",
                 use_container_width=True, key=f"dl_{key}",
             )
+        with col_nav:
+            _stc.html("""
+            <style>
+                html, body { margin:0; padding:0; height:38px; overflow:hidden; }
+                body { display:flex; align-items:center; justify-content:flex-end; }
+                .tab-nav { display:flex; align-items:center; gap:6px; }
+                .tab-nav-btn {
+                    background: transparent;
+                    border: 1px solid #424650;
+                    color: #a4a4ad;
+                    border-radius: 6px;
+                    padding: 0 12px;
+                    height: 32px;
+                    font-size: 12px;
+                    font-family: 'Open Sans', sans-serif;
+                    cursor: pointer;
+                    white-space: nowrap;
+                    transition: border-color 0.15s, color 0.15s;
+                }
+                .tab-nav-btn:hover { border-color: #42b4ff; color: #42b4ff; }
+            </style>
+            <div class="tab-nav">
+                <button class="tab-nav-btn" onclick="goTab('Build')">📊 Build</button>
+                <button class="tab-nav-btn" onclick="goTab('Metrics')">📐 Metrics</button>
+                <button class="tab-nav-btn" onclick="goTab('Schema')">🗺️ Schema</button>
+            </div>
+            <script>
+            function goTab(name) {
+                var tabs = window.parent.document.querySelectorAll('button[role="tab"]');
+                for (var i = 0; i < tabs.length; i++) {
+                    if (tabs[i].innerText.trim().indexOf(name) !== -1) {
+                        tabs[i].click(); break;
+                    }
+                }
+            }
+            </script>
+            """, height=38)
 
     # Follow-up suggestions
     if r.followups:
@@ -974,14 +1015,30 @@ with st.sidebar:
     st.divider()
 
     # ── 3. CONNECT / SESSION BUTTONS ──────────────────────────────────
+    # Pre-fill MLX fields only on Apple Silicon — meaningless elsewhere.
+    _IS_APPLE_SILICON = sys.platform == "darwin" and platform.machine() == "arm64"
+
+    # Config written by the first-time setup wizard (overrides built-in defaults)
+    _wiz = _load_wizard_config()
+
     # Seed session_state defaults once (avoids value= + key= conflict in widgets below).
     _sb_defaults = {
-        "_sb_llm_type":      "Ollama",
-        "_sb_ollama_url":    _DEFAULT_OLLAMA_URL   or "http://localhost:11434",
-        "_sb_ollama_model":  _DEFAULT_OLLAMA_MODEL or "llama3.1:8b",
-        "_sb_api_url":       "http://localhost:1234/v1",
-        "_sb_api_model":     "local-model",
+        "_sb_llm_type":      _wiz.get("llm_backend",
+                                 "MLX (Apple Silicon)" if _IS_APPLE_SILICON else "Ollama"),
+        "_sb_ollama_url":    _wiz.get("ollama_url",
+                                 _DEFAULT_OLLAMA_URL or "http://localhost:11434"),
+        "_sb_ollama_model":  _wiz.get("ollama_model",
+                                 _DEFAULT_OLLAMA_MODEL or "qwen3:8b"),
+        "_sb_api_url":       _wiz.get("api_url",   "http://localhost:1234/v1"),
+        "_sb_api_model":     _wiz.get("api_model", "local-model"),
         "_sb_api_key":       "not-needed",
+        "_sb_mlx_url":       _wiz.get("mlx_url",
+                                 "http://localhost:8080/v1" if _IS_APPLE_SILICON else ""),
+        "_sb_mlx_model":     _wiz.get("mlx_model",
+                                 "mlx-community/Qwen3-8B-4bit" if _IS_APPLE_SILICON else ""),
+        "_sb_embed_backend": "FastEmbed (in-process)",
+        "_sb_embed_url":     "",
+        "_sb_embed_model":   "nomic-ai/nomic-embed-text-v1.5",
         "_sb_extra_context": "",
         "_sb_max_rows":      5000,
         "_sb_chart_lib":     "auto",
@@ -999,6 +1056,11 @@ with st.sidebar:
     _api_url      = st.session_state["_sb_api_url"]
     _api_model    = st.session_state["_sb_api_model"]
     _api_key      = st.session_state["_sb_api_key"]
+    _mlx_url      = st.session_state["_sb_mlx_url"]
+    _mlx_model    = st.session_state["_sb_mlx_model"]
+    _embed_backend = st.session_state["_sb_embed_backend"]
+    _embed_url     = st.session_state["_sb_embed_url"]
+    _embed_model   = st.session_state["_sb_embed_model"]
     _extra_ctx    = st.session_state["_sb_extra_context"]
     _max_rows     = int(st.session_state["_sb_max_rows"])
     _chart_lib    = st.session_state["_sb_chart_lib"]
@@ -1039,6 +1101,8 @@ with st.sidebar:
 
                 if _llm_type == "Ollama":
                     llm = OllamaBackend(model=_ollama_model, base_url=_ollama_url)
+                elif _llm_type == "MLX (Apple Silicon)":
+                    llm = MLXBackend(base_url=_mlx_url, model=_mlx_model)
                 else:
                     llm = OpenAICompatibleBackend(
                         base_url=_api_url, model=_api_model, api_key=_api_key,
@@ -1060,6 +1124,14 @@ with st.sidebar:
                 else:
                     schema_param = None
 
+                # Map sidebar label → backend key used by build_embedding_fn
+                _embed_backend_key = {
+                    "Bag of words (offline)": "bow",
+                    "FastEmbed (in-process)": "fastembed",
+                    "Ollama":                 "ollama",
+                    "OpenAI-compatible":      "openai",
+                }.get(_embed_backend, "bow")
+
                 chat = ExasolChat(
                     connection=config,
                     llm=llm,
@@ -1071,6 +1143,9 @@ with st.sidebar:
                     kb_path=_kb_path.strip() or None,
                     chart_library=_chart_lib,
                     metrics_path=_metrics_path.strip() or None,
+                    embedding_backend=_embed_backend_key,
+                    embedding_url=_embed_url.strip(),
+                    embedding_model=_embed_model.strip() or "nomic-embed-text",
                 )
 
             st.session_state.chat = chat
@@ -1113,17 +1188,125 @@ with st.sidebar:
     # ── 4. LLM BACKEND ────────────────────────────────────────────────
     with st.expander("🤖 LLM Backend", expanded=not st.session_state.connected):
         llm_type = st.selectbox(
-            "Backend", ["Ollama", "OpenAI-compatible API"], key="_sb_llm_type",
+            "Backend",
+            ["Ollama", "MLX (Apple Silicon)", "OpenAI-compatible API"],
+            key="_sb_llm_type",
         )
         if llm_type == "Ollama":
             st.text_input("URL",   key="_sb_ollama_url")
             st.text_input("Model", key="_sb_ollama_model")
+        elif llm_type == "MLX (Apple Silicon)":
+            st.text_input("Server URL", key="_sb_mlx_url")
+            st.text_input(
+                "Model",
+                key="_sb_mlx_model",
+                help="Any mlx-community model, e.g. mlx-community/Qwen3-8B-4bit",
+            )
+            if _IS_APPLE_SILICON:
+                st.caption(
+                    "Install once: `pip install exachat[mlx]`  \n"
+                    "Then start the server:  \n"
+                    f"`python3 -m mlx_lm.server --model {st.session_state.get('_sb_mlx_model', 'mlx-community/Qwen3-8B-4bit')} --port 8080`"
+                )
+            else:
+                st.caption(
+                    "⚠️ MLX runs only on Apple Silicon (M-series Mac).  \n"
+                    "Enter the URL and model manually if connecting to a remote MLX server."
+                )
         else:
             st.text_input("API URL", key="_sb_api_url")
             st.text_input("Model",   key="_sb_api_model")
             st.text_input("API Key", key="_sb_api_key", type="password")
 
-    # ── 5. KNOWLEDGE BASE ─────────────────────────────────────────────
+        # ── Live server status ping ───────────────────────────────────
+        # Clear stale result when backend type changes
+        if st.session_state.get("_ping_last_type") != llm_type:
+            st.session_state.pop("_ping_result", None)
+            st.session_state["_ping_last_type"] = llm_type
+
+        _ping_col, _ping_btn_col = st.columns([3, 1])
+        with _ping_btn_col:
+            _do_ping = st.button("🔄", help="Check server connectivity", key="_btn_ping")
+        with _ping_col:
+            if _do_ping or st.session_state.get("_ping_result"):
+                if _do_ping:
+                    # Build a temporary backend just for the ping
+                    try:
+                        if llm_type == "Ollama":
+                            from exachat.llm import OllamaBackend
+                            _tmp = OllamaBackend(
+                                model=st.session_state.get("_sb_ollama_model", ""),
+                                base_url=st.session_state.get("_sb_ollama_url", ""),
+                            )
+                        elif llm_type == "MLX (Apple Silicon)":
+                            _tmp = MLXBackend(
+                                base_url=st.session_state.get("_sb_mlx_url", ""),
+                                model=st.session_state.get("_sb_mlx_model", ""),
+                            )
+                        else:
+                            from exachat.llm import OpenAICompatibleBackend
+                            _tmp = OpenAICompatibleBackend(
+                                base_url=st.session_state.get("_sb_api_url", ""),
+                                model=st.session_state.get("_sb_api_model", ""),
+                            )
+                        _ok, _msg = _tmp.ping()
+                        st.session_state["_ping_result"] = (_ok, _msg)
+                    except Exception as _pe:
+                        st.session_state["_ping_result"] = (False, str(_pe))
+
+                _ok, _msg = st.session_state.get("_ping_result", (None, ""))
+                if _ok is True:
+                    st.success(_msg, icon="✅")
+                elif _ok is False:
+                    st.error(_msg, icon="🔴")
+
+    # ── 5. EMBEDDINGS ─────────────────────────────────────────────────
+    with st.expander("🔢 Embeddings", expanded=False):
+        embed_backend = st.selectbox(
+            "Backend",
+            ["FastEmbed (in-process)", "Ollama", "OpenAI-compatible", "Bag of words (offline)"],
+            key="_sb_embed_backend",
+            help="FastEmbed is the default — runs fully in-process via ONNX, no server needed. Switch to Ollama or OpenAI-compatible for a remote embedding server, or Bag of words for zero-dependency offline mode.",
+        )
+        if embed_backend == "FastEmbed (in-process)":
+            st.text_input(
+                "Model",
+                key="_sb_embed_model",
+                help="Any fastembed-compatible model. Default: nomic-ai/nomic-embed-text-v1.5",
+            )
+            st.session_state["_sb_embed_url"] = ""
+            st.caption(
+                "Runs fully in-process — no server required.  \n"
+                "Model (~130 MB) is downloaded once on first connect and cached locally."
+            )
+        elif embed_backend == "Ollama":
+            st.text_input(
+                "Ollama URL",
+                key="_sb_embed_url",
+                placeholder="http://localhost:11434",
+            )
+            st.text_input(
+                "Model",
+                key="_sb_embed_model",
+                help="Run: ollama pull nomic-embed-text",
+            )
+            st.caption("`ollama pull nomic-embed-text`")
+        elif embed_backend == "OpenAI-compatible":
+            st.text_input(
+                "API URL",
+                key="_sb_embed_url",
+                placeholder="http://localhost:1234/v1",
+            )
+            st.text_input("Model", key="_sb_embed_model")
+        else:
+            # Bag of words — no fields needed
+            st.session_state["_sb_embed_url"] = ""
+            st.caption(
+                "Offline MD5-hashed keyword matching — no model download, no server.  \n"
+                "For better semantic retrieval switch back to **FastEmbed** (the default)."
+            )
+
+    # ── 6. KNOWLEDGE BASE ─────────────────────────────────────────────
     with st.expander("📖 Knowledge Base", expanded=False):
         st.text_input(
             "Extra KB directory",
@@ -1134,7 +1317,7 @@ with st.sidebar:
         if st.session_state.connected and st.session_state.chat:
             st.caption(f"{st.session_state.chat.kb.count} SQL patterns loaded.")
 
-    # ── 6. METRICS CATALOG ────────────────────────────────────────────
+    # ── 7. METRICS CATALOG ────────────────────────────────────────────
     with st.expander("📐 Metrics Catalog", expanded=False):
         st.text_input(
             "Metrics directory",
@@ -1143,7 +1326,7 @@ with st.sidebar:
             help="Set EXACHAT_METRICS_PATH in .env to pre-fill.",
         )
 
-    # ── 7. OPTIONS ────────────────────────────────────────────────────
+    # ── 8. OPTIONS ────────────────────────────────────────────────────
     with st.expander("⚙️ Options", expanded=False):
         st.text_area(
             "Extra context / DDL",
@@ -1263,6 +1446,97 @@ _stc.html(
     </script>""",
     height=0,
 )
+
+# ── Scroll utilities: floating ↓ button + per-tab scroll memory ───────
+# Injected once; guard on window.parent._exachatScrollReady survives
+# Streamlit soft-reruns so the MutationObserver is never duplicated.
+# Scroll technique (from gist.github.com/dtmilano/41a8c45d9e17c663bb970ab318cec96c):
+#   append a real sentinel div to parent body → scrollIntoView propagates
+#   through all scroll ancestors automatically → remove sentinel.
+_stc.html("""<script>
+(function () {
+    var par = window.parent;
+    var pdoc = par.document;
+
+    /* ── already initialised in this page session ── */
+    if (par._exachatScrollReady) return;
+    par._exachatScrollReady = true;
+
+    /* ── helper: scroll parent page to absolute bottom ── */
+    function scrollToBottom() {
+        var s = pdoc.createElement('div');
+        pdoc.body.appendChild(s);
+        s.scrollIntoView({ behavior: 'smooth' });
+        setTimeout(function () { if (s.parentNode) s.parentNode.removeChild(s); }, 800);
+    }
+
+    /* ── floating ↓ button ── */
+    var btn = pdoc.createElement('button');
+    btn.id = 'exachat-scroll-btn';
+    btn.title = 'Scroll to bottom';
+    btn.innerHTML = '&#8595;';
+    Object.assign(btn.style, {
+        position:       'fixed',
+        bottom:         '1.5rem',
+        left:           '50%',
+        transform:      'translateX(-50%)',
+        zIndex:         '99999',
+        width:          '2.2rem',
+        height:         '2.2rem',
+        borderRadius:   '50%',
+        background:     '#42b4ff',
+        color:          '#161d26',
+        border:         'none',
+        fontSize:       '1.15rem',
+        fontWeight:     '700',
+        cursor:         'pointer',
+        boxShadow:      '0 2px 10px rgba(0,0,0,0.45)',
+        display:        'flex',
+        alignItems:     'center',
+        justifyContent: 'center',
+        lineHeight:     '1',
+        opacity:        '0.7',
+        transition:     'opacity 0.15s',
+    });
+    btn.onmouseenter = function () { btn.style.opacity = '1'; };
+    btn.onmouseleave = function () { btn.style.opacity = '0.7'; };
+    btn.onclick      = scrollToBottom;
+    pdoc.body.appendChild(btn);
+
+    /* ── per-tab scroll memory ── */
+    var KEY = '_esc_';          // sessionStorage prefix
+    var saveTimer;
+
+    function activeTabKey() {
+        var t = pdoc.querySelector('button[role="tab"][aria-selected="true"]');
+        return t ? KEY + t.innerText.trim() : KEY + 'default';
+    }
+
+    /* save current scroll Y, debounced */
+    par.addEventListener('scroll', function () {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(function () {
+            sessionStorage.setItem(activeTabKey(), String(Math.round(par.scrollY)));
+        }, 120);
+    }, { passive: true });
+
+    /* watch for tab selection changes */
+    var prevKey = activeTabKey();
+    var obs = new MutationObserver(function () {
+        var cur = activeTabKey();
+        if (cur === prevKey) return;
+        prevKey = cur;
+        /* wait for tab content to paint, then restore saved position */
+        setTimeout(function () {
+            var saved = sessionStorage.getItem(cur);
+            par.scrollTo({ top: saved ? parseInt(saved, 10) : 0, behavior: 'instant' });
+        }, 180);
+    });
+    /* observe the tabs container; fall back to body if not found yet */
+    var root = pdoc.querySelector('[data-testid="stTabs"]') || pdoc.body;
+    obs.observe(root, { subtree: true, attributes: true, attributeFilter: ['aria-selected'] });
+})();
+</script>""", height=0)
 
 tab_ask, tab_build, tab_metrics, tab_schema = st.tabs(
     ["💬 Ask", "📊 Build", "📐 Metrics", "🗺️ Schema"]
@@ -1385,7 +1659,7 @@ with tab_schema:
                     markers = " PK"
                 elif c.foreign_key:
                     markers = " FK"
-                mer_lines.append(f"        {atype} {aname}{markers}")
+                mer_lines.append(f"        {aname} {atype}{markers}")
             if len(t.columns) > 30:
                 extra = len(t.columns) - 30
                 mer_lines.append(f"        varchar more{extra}cols")
@@ -1459,40 +1733,18 @@ with tab_schema:
         else:
             _stc.html(_html_page, height=_height, scrolling=True)
 
+        with st.expander("✅ Detected Join Paths", expanded=False):
+            if jmap["joins"]:
+                for j in jmap["joins"]:
+                    badge_color = "#22c55e" if j["match"] == "exact" else "#fb923c"
+                    badge_label = j["match"]
+                    st.markdown(
+                        f'`{j["t1"]}.{j["c1"]}` **=** `{j["t2"]}.{j["c2"]}` &nbsp;'
+                        f'<span style="color:{badge_color};font-size:0.74rem">{badge_label}</span>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No shared columns detected between any table pair.")
+
         with st.expander("🔍 Mermaid source", expanded=False):
             st.code(mermaid_src, language="text")
-
-    st.divider()
-
-    # ── Join summary panels ────────────────────────────────────────
-    col_jp, col_nj = st.columns(2)
-
-    with col_jp:
-        st.markdown('<p style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#29ad7f;margin:16px 0 8px;">✅ Detected join paths</p>', unsafe_allow_html=True)
-        if jmap["joins"]:
-            for j in jmap["joins"]:
-                badge_color = "#22c55e" if j["match"] == "exact" else "#fb923c"
-                badge_label = j["match"]
-                st.markdown(
-                    f'`{j["t1"]}.{j["c1"]}` **=** `{j["t2"]}.{j["c2"]}` &nbsp;'
-                    f'<span style="color:{badge_color};font-size:0.74rem">{badge_label}</span>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("No shared columns detected between any table pair.")
-
-    with col_nj:
-        st.markdown('<p style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#f0a800;margin:16px 0 8px;">⚠ No direct join path</p>', unsafe_allow_html=True)
-        if jmap["no_join"]:
-            st.caption(
-                "These pairs share no column — requires an intermediate table. "
-                "The LLM is told not to attempt direct JOINs between them."
-            )
-            for t1, t2 in jmap["no_join"]:
-                st.markdown(
-                    f'`{t1}` **↔** `{t2}` '
-                    '<span style="color:#d13212;font-size:0.74rem">no shared column</span>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("All table pairs have at least one detected join path.")
