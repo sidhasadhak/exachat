@@ -34,95 +34,199 @@ st.set_page_config(
 # ── Custom styles — Claude-inspired palette ───────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+    /* ── Cloudscape Design System inspired theme ────────────────────────── */
+    @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-    html, body, [class*="css"] { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
-    .block-container { padding-top: 1.5rem; max-width: 1100px; }
-    code, pre, .stCode { font-family: 'JetBrains Mono', monospace !important; }
-
-    /* Compact app header */
-    header[data-testid="stHeader"],
-    .stAppHeader {
-        height: 2.75rem !important;
-        min-height: 2.75rem !important;
+    /* Design tokens */
+    :root {
+        --cs-bg-page:        #161d26;
+        --cs-bg-container:   #1b232d;
+        --cs-bg-sidebar:     #0f141a;
+        --cs-bg-hover:       #333843;
+        --cs-bg-input:       #232b37;
+        --cs-border:         #424650;
+        --cs-border-subtle:  #232b37;
+        --cs-text-primary:   #ebebf0;
+        --cs-text-secondary: #a4a4ad;
+        --cs-text-muted:     #656871;
+        --cs-blue:           #42b4ff;
+        --cs-blue-hover:     #75cfff;
+        --cs-green:          #29ad7f;
+        --cs-yellow:         #f0a800;
+        --cs-red:            #d13212;
+        --cs-radius-sm:      4px;
+        --cs-radius:         8px;
+        --cs-radius-lg:      12px;
     }
 
-    [data-testid="stSidebar"] { background-color: #1a1a1a; }
-    [data-testid="stSidebar"] * { color: #e8e8e8 !important; }
+    /* ── Base ────────────────────────────────────────────────────────────── */
+    html, body, [class*="css"] {
+        font-family: 'Open Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 14px;
+        line-height: 20px;
+    }
+    .stApp { background-color: var(--cs-bg-page) !important; }
+    .block-container { padding-top: 1.25rem; max-width: 1100px; }
+    code, pre, .stCode, [data-testid="stCode"] {
+        font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Consolas', monospace !important;
+        font-size: 12px !important;
+    }
+
+    /* ── App header ──────────────────────────────────────────────────────── */
+    header[data-testid="stHeader"], .stAppHeader {
+        height: 2.75rem !important;
+        min-height: 2.75rem !important;
+        background-color: var(--cs-bg-sidebar) !important;
+        border-bottom: 1px solid var(--cs-border) !important;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    [data-testid="stSidebar"] {
+        background-color: var(--cs-bg-sidebar) !important;
+        border-right: 1px solid var(--cs-border) !important;
+    }
+    [data-testid="stSidebar"] * { color: var(--cs-text-primary) !important; }
     [data-testid="stSidebar"] .stSelectbox label,
     [data-testid="stSidebar"] .stTextInput label,
     [data-testid="stSidebar"] .stTextArea label,
-    [data-testid="stSidebar"] .stNumberInput label { color: #a0a0a0 !important; font-size: 0.8rem !important; }
-
-    [data-testid="stChatMessage"] {
-        border-radius: 12px; padding: 0.75rem 1rem; margin-bottom: 0.5rem;
-    }
-
-    .badge-safe {
-        display: inline-block; padding: 2px 10px; border-radius: 20px;
-        background: rgba(34, 197, 94, 0.12); color: #22c55e;
-        font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;
-    }
-    .badge-warn {
-        display: inline-block; padding: 2px 10px; border-radius: 20px;
-        background: rgba(251, 146, 60, 0.12); color: #fb923c;
-        font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;
-    }
-    .badge-blocked {
-        display: inline-block; padding: 2px 10px; border-radius: 20px;
-        background: rgba(239, 68, 68, 0.12); color: #ef4444;
-        font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em;
-    }
-
-    .kb-indicator { font-size: 0.73rem; color: #9ca3af; margin-top: 6px; }
-
-    .col-warning {
-        background: rgba(251, 191, 36, 0.08); border-left: 3px solid #fbbf24;
-        padding: 6px 10px; border-radius: 4px; font-size: 0.82rem;
-        color: #d97706; margin-bottom: 6px;
-    }
-
-    .schema-table-name { font-weight: 600; font-size: 0.9rem; color: #f97316; }
-    .schema-row-count  { font-size: 0.75rem; color: #6b7280; }
-
-    /* Follow-up suggestion pills */
-    div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
-        background: rgba(249, 115, 22, 0.08) !important;
-        border: 1px solid rgba(249, 115, 22, 0.3) !important;
-        color: #f97316 !important;
-        border-radius: 20px !important;
-        font-size: 0.82rem !important;
-        padding: 4px 14px !important;
-    }
-    div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
-        background: rgba(249, 115, 22, 0.15) !important;
-    }
-
-    .stButton > button[kind="primary"] { background: #f97316; border: none; }
-    .stButton > button[kind="primary"]:hover { background: #ea6c0a; }
-
-    /* Tab labels — target the actual <p> inside stMarkdownContainer inside stTab */
-    button[data-testid="stTab"] p {
-        color: #b0b0b0 !important;
-        font-size: 0.92rem !important;
-        font-weight: 500 !important;
-        margin: 0 !important;
-    }
-    button[data-testid="stTab"]:hover p {
-        color: #ffffff !important;
-    }
-    button[data-testid="stTab"][aria-selected="true"] p {
-        color: #f97316 !important;
+    [data-testid="stSidebar"] .stNumberInput label,
+    [data-testid="stSidebar"] .stMultiSelect label {
+        color: var(--cs-text-secondary) !important;
+        font-size: 12px !important;
         font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
+    [data-testid="stSidebar"] hr {
+        border-color: var(--cs-border) !important;
+        margin: 12px 0 !important;
+    }
+
+    /* ── Form inputs ─────────────────────────────────────────────────────── */
+    .stTextInput > div > div > input,
+    .stTextArea > div > div > textarea,
+    .stNumberInput > div > div > input {
+        background-color: var(--cs-bg-input) !important;
+        border: 1px solid var(--cs-border) !important;
+        border-radius: var(--cs-radius-sm) !important;
+        color: var(--cs-text-primary) !important;
+        font-size: 14px !important;
+        transition: border-color 0.15s ease !important;
+    }
+    .stTextInput > div > div > input:focus,
+    .stTextArea > div > div > textarea:focus {
+        border-color: var(--cs-blue) !important;
+        box-shadow: 0 0 0 2px rgba(66,180,255,0.2) !important;
+    }
+    .stSelectbox > div > div,
+    .stMultiSelect > div > div {
+        background-color: var(--cs-bg-input) !important;
+        border: 1px solid var(--cs-border) !important;
+        border-radius: var(--cs-radius-sm) !important;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    .stButton > button[kind="primary"],
+    .stFormSubmitButton > button {
+        background-color: var(--cs-blue) !important;
+        color: #0f141a !important;
+        border: none !important;
+        border-radius: var(--cs-radius-sm) !important;
+        font-weight: 700 !important;
+        font-size: 14px !important;
+        letter-spacing: 0.01em !important;
+        padding: 6px 20px !important;
+        transition: background-color 0.15s ease, box-shadow 0.15s ease !important;
+    }
+    .stButton > button[kind="primary"]:hover,
+    .stFormSubmitButton > button:hover {
+        background-color: var(--cs-blue-hover) !important;
+        box-shadow: 0 0 0 3px rgba(66,180,255,0.25) !important;
+    }
+    .stButton > button[kind="secondary"],
+    .stDownloadButton > button {
+        background-color: transparent !important;
+        color: var(--cs-text-primary) !important;
+        border: 1px solid var(--cs-border) !important;
+        border-radius: var(--cs-radius-sm) !important;
+        font-weight: 600 !important;
+        font-size: 14px !important;
+        padding: 5px 20px !important;
+        transition: background-color 0.15s ease, border-color 0.15s ease !important;
+    }
+    .stButton > button[kind="secondary"]:hover,
+    .stDownloadButton > button:hover {
+        background-color: var(--cs-bg-hover) !important;
+        border-color: var(--cs-blue) !important;
+    }
+
+    /* ── Chat messages ───────────────────────────────────────────────────── */
+    [data-testid="stChatMessage"] {
+        background-color: var(--cs-bg-container) !important;
+        border: 1px solid var(--cs-border-subtle) !important;
+        border-radius: var(--cs-radius) !important;
+        padding: 12px 16px !important;
+        margin-bottom: 8px !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stChatInputContainer"],
+    [data-testid="stBottom"] {
+        background-color: var(--cs-bg-page) !important;
+        border-top: 1px solid var(--cs-border) !important;
+        padding-top: 8px !important;
+    }
+    [data-testid="stChatInputContainer"] textarea,
+    [data-testid="stChatInput"] textarea {
+        background-color: var(--cs-bg-input) !important;
+        border: 1px solid var(--cs-border) !important;
+        border-radius: var(--cs-radius) !important;
+        color: var(--cs-text-primary) !important;
+    }
+    [data-testid="stChatInputContainer"] textarea:focus,
+    [data-testid="stChatInput"] textarea:focus {
+        border-color: var(--cs-blue) !important;
+        box-shadow: 0 0 0 2px rgba(66,180,255,0.2) !important;
+    }
+
+    /* ── Expanders ───────────────────────────────────────────────────────── */
+    [data-testid="stExpander"] {
+        background-color: var(--cs-bg-container) !important;
+        border: 1px solid var(--cs-border) !important;
+        border-radius: var(--cs-radius) !important;
+        margin-bottom: 8px !important;
+    }
+    [data-testid="stExpander"] summary {
+        padding: 10px 16px !important;
+        font-weight: 600 !important;
+        font-size: 13px !important;
+        color: var(--cs-text-secondary) !important;
+        border-radius: var(--cs-radius) !important;
+    }
+    [data-testid="stExpander"] summary:hover {
+        color: var(--cs-text-primary) !important;
+        background-color: var(--cs-bg-hover) !important;
+    }
+
+    /* ── Tabs ────────────────────────────────────────────────────────────── */
+    button[data-testid="stTab"] p {
+        color: var(--cs-text-secondary) !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        margin: 0 !important;
+        letter-spacing: 0.01em !important;
+    }
+    button[data-testid="stTab"]:hover p { color: var(--cs-text-primary) !important; }
+    button[data-testid="stTab"][aria-selected="true"] p {
+        color: var(--cs-blue) !important;
+        font-weight: 700 !important;
     }
     [data-baseweb="tab-highlight"] {
-        background-color: #f97316 !important;
+        background-color: var(--cs-blue) !important;
+        height: 2px !important;
     }
-    [data-baseweb="tab-border"] {
-        background-color: #2d2d2d !important;
-    }
+    [data-baseweb="tab-border"] { background-color: var(--cs-border) !important; }
 
-    /* Sticky tab bar — stays accessible while scrolling */
+    /* Sticky tab bar */
     [data-testid="stTabs"] > div:first-child,
     div[data-baseweb="tabs"] > div:first-child,
     div[role="tablist"] {
@@ -130,9 +234,119 @@ st.markdown("""
         position: sticky !important;
         top: 2.75rem !important;
         z-index: 100 !important;
-        background-color: #0e1117 !important;
+        background-color: var(--cs-bg-page) !important;
         padding-bottom: 2px !important;
     }
+
+    /* ── Dataframe / table ───────────────────────────────────────────────── */
+    .stDataFrame, [data-testid="stDataFrame"] {
+        border: 1px solid var(--cs-border) !important;
+        border-radius: var(--cs-radius) !important;
+        overflow: hidden !important;
+    }
+    [data-testid="stDataFrame"] thead th {
+        background-color: var(--cs-bg-input) !important;
+        color: var(--cs-text-secondary) !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+        border-bottom: 1px solid var(--cs-border) !important;
+    }
+
+    /* ── Metrics ─────────────────────────────────────────────────────────── */
+    [data-testid="stMetric"] {
+        background-color: var(--cs-bg-container) !important;
+        border: 1px solid var(--cs-border) !important;
+        border-radius: var(--cs-radius) !important;
+        padding: 16px 20px !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: var(--cs-text-primary) !important;
+        font-size: 28px !important;
+        font-weight: 300 !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: var(--cs-text-secondary) !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.05em !important;
+    }
+
+    /* ── Alerts ──────────────────────────────────────────────────────────── */
+    .stAlert { border-radius: var(--cs-radius) !important; }
+    [data-testid="stAlert"] {
+        background-color: rgba(66,180,255,0.08) !important;
+        border-color: rgba(66,180,255,0.3) !important;
+    }
+
+    /* ── App-specific components ─────────────────────────────────────────── */
+    .badge-safe {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 10px; border-radius: 12px;
+        background: rgba(41,173,127,0.12); color: #29ad7f;
+        border: 1px solid rgba(41,173,127,0.3);
+        font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .badge-warn {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 10px; border-radius: 12px;
+        background: rgba(240,168,0,0.12); color: #f0a800;
+        border: 1px solid rgba(240,168,0,0.3);
+        font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .badge-blocked {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 10px; border-radius: 12px;
+        background: rgba(209,50,18,0.12); color: #d13212;
+        border: 1px solid rgba(209,50,18,0.3);
+        font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .kb-indicator { font-size: 12px; color: var(--cs-text-muted); margin-top: 6px; }
+    .col-warning {
+        background: rgba(240,168,0,0.08);
+        border: 1px solid rgba(240,168,0,0.25);
+        border-left: 3px solid #f0a800;
+        padding: 8px 12px; border-radius: var(--cs-radius-sm);
+        font-size: 13px; color: #f0a800; margin-bottom: 8px;
+    }
+    .schema-table-name { font-weight: 700; font-size: 13px; color: var(--cs-blue); }
+    .schema-row-count  { font-size: 12px; color: var(--cs-text-muted); }
+
+    /* Follow-up suggestion pills */
+    div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+        background: rgba(66,180,255,0.08) !important;
+        border: 1px solid rgba(66,180,255,0.3) !important;
+        color: var(--cs-blue) !important;
+        border-radius: 16px !important;
+        font-size: 13px !important;
+        padding: 4px 16px !important;
+        font-weight: 400 !important;
+        transition: background 0.15s ease !important;
+    }
+    div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
+        background: rgba(66,180,255,0.16) !important;
+        border-color: var(--cs-blue) !important;
+    }
+
+    /* ── Responsive ──────────────────────────────────────────────────────── */
+    @media (min-width: 1400px) { .block-container { max-width: 1300px !important; } }
+    @media (min-width: 1800px) {
+        .block-container { max-width: 1600px !important; padding-left: 3rem; padding-right: 3rem; }
+    }
+    @media (max-width: 1280px) {
+        .block-container { max-width: 100% !important; padding-left: 1rem !important; padding-right: 1rem !important; }
+    }
+    @media (max-width: 768px) {
+        .block-container { padding: 0.5rem !important; }
+        html, body, [class*="css"] { font-size: 13px; }
+        [data-testid="stSidebar"] .stSelectbox label,
+        [data-testid="stSidebar"] .stTextInput label { font-size: 11px !important; }
+        button[data-testid="stTab"] p { font-size: 13px !important; }
+        div[data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
+    }
+    @media (min-width: 1600px) { [data-testid="stSidebar"] { min-width: 320px !important; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -240,21 +454,236 @@ def _clean_summary(text: str) -> str:
     return text
 
 
+def _fmt_labels(series: pd.Series) -> list:
+    """Format numeric values as compact human-readable strings for chart labels."""
+    vals = series.dropna()
+    if vals.empty:
+        return [""] * len(series)
+    max_abs = float(vals.abs().max())
+
+    def _f(v):
+        if pd.isna(v):
+            return ""
+        v = float(v)
+        if max_abs >= 1e9:
+            return f"{v/1e9:.1f}B"
+        if max_abs >= 1e6:
+            return f"{v/1e6:.1f}M"
+        if max_abs >= 1e3:
+            return f"{v/1e3:.1f}K"
+        if max_abs >= 1:
+            try:
+                return f"{v:,.0f}" if v == int(v) else f"{v:.3g}"
+            except (ValueError, OverflowError):
+                return f"{v:.3g}"
+        return f"{v:.3g}"
+
+    return [_f(v) for v in series]
+
+
+_CHART_PALETTE = ["#486de8", "#f59e0b", "#8b5cf6", "#06b6d4", "#84cc16", "#ec4899"]
+_C_POS_NEG     = "#018977"  # positive bars when series contains negatives
+_C_NEG         = "#962249"  # negative bars (any series)
+_C_ONLY_POS    = "#486de8"  # bars that are entirely non-negative (single series)
+
+
+def _dual_axis_zero_ranges(y1_cols, y2_cols, df):
+    """Return aligned (y1_range, y2_range) so both Y axes share a single zero level.
+
+    When one or both axes cross zero, the zero tick must be at the same fractional
+    height on both axes to avoid two separate baseline bands.
+    """
+    try:
+        def _span(cols):
+            vals = pd.concat(
+                [df[c] for c in cols if c in df.columns], ignore_index=True
+            ).dropna()
+            if vals.empty:
+                return 0.0, 1.0
+            return float(vals.min()), float(vals.max())
+
+        y1_mn, y1_mx = _span(y1_cols)
+        y2_mn, y2_mx = _span(y2_cols)
+
+        # Clamp both to include zero
+        y1_mn, y1_mx = min(0.0, y1_mn), max(0.0, y1_mx)
+        y2_mn, y2_mx = min(0.0, y2_mn), max(0.0, y2_mx)
+
+        # Fraction of the range that sits below zero
+        def _neg_frac(mn, mx):
+            r = mx - mn
+            return abs(mn) / r if r > 0 else 0.0
+
+        # Adopt the larger fraction so neither axis clips its data
+        frac = max(_neg_frac(y1_mn, y1_mx), _neg_frac(y2_mn, y2_mx))
+        if frac == 0.0:
+            return None, None  # no negatives anywhere — no alignment needed
+
+        def _new_range(mn, mx, f, pad=0.08):
+            abs_mn = abs(mn)
+            # Positive span required so zero lands at fraction f
+            pos_needed = abs_mn * (1 - f) / f if f > 0 else mx
+            # Negative span required so zero lands at fraction f
+            neg_needed = mx * f / (1 - f) if (1 - f) > 0 else abs_mn
+            pos_span = max(mx, pos_needed)
+            neg_span = max(abs_mn, neg_needed)
+            total = neg_span + pos_span
+            return [-neg_span - total * pad, pos_span + total * pad]
+
+        return _new_range(y1_mn, y1_mx, frac), _new_range(y2_mn, y2_mx, frac)
+    except Exception:
+        return None, None
+
+
+def _build_chart_figure(
+    df: pd.DataFrame,
+    x_col: str,
+    y1_cols: list,
+    y2_cols: list,
+    chart_type: str,
+) -> object:
+    """Build a Plotly figure with dual-axis, brand color coding, and data labels.
+
+    Color rules:
+      - Entirely non-negative series → #486de8 (or palette for multi-series)
+      - Series with negatives        → positive bars #018977, negative bars #e07f9d
+    Dual-axis zeros are aligned so there is only one baseline band.
+    Labels appear for small datasets; uniformtext hides overlapping labels gracefully.
+    """
+    import plotly.graph_objects as go
+    import plotly.express as _px
+
+    n_rows  = len(df)
+    all_cols = y1_cols + y2_cols
+
+    # ── Pie: special-case (no dual axis) ──────────────────────────
+    if chart_type == "pie" and y1_cols:
+        fig = _px.pie(df, names=x_col, values=y1_cols[0])
+        fig.update_traces(textinfo="label+percent", textposition="auto")
+        fig.update_layout(margin=dict(t=30, b=0), legend_title_text="")
+        return fig
+
+    fig = go.Figure()
+
+    bar_labels  = chart_type == "bar"            and n_rows <= 30
+    line_labels = chart_type in ("line", "area") and n_rows <= 20
+    scat_labels = chart_type == "scatter"         and n_rows <= 15
+
+    for axis_n, (cols, yaxis) in enumerate([(y1_cols, "y"), (y2_cols, "y2")]):
+        for i, col in enumerate(cols):
+            if col not in df.columns:
+                continue
+            pal_idx  = (len(y1_cols) if axis_n else 0) + i
+            vals     = df[col]
+            col_has_neg = pd.api.types.is_numeric_dtype(vals) and (vals < 0).any()
+
+            # Resolve base color for this series
+            if col_has_neg:
+                base = _C_POS_NEG  # positive split-trace for mixed series
+            else:
+                base = _CHART_PALETTE[pal_idx % len(_CHART_PALETTE)]
+
+            if chart_type == "bar":
+                if col_has_neg:
+                    # Split into positive (shown in legend) + negative (hidden from
+                    # legend, colored red). offsetgroup keeps both at the same x slot.
+                    pos = vals.where(vals >= 0)
+                    neg = vals.where(vals < 0)
+                    common = dict(yaxis=yaxis, offsetgroup=col, cliponaxis=False)
+                    fig.add_trace(go.Bar(
+                        name=col, x=df[x_col], y=pos,
+                        marker_color=_C_POS_NEG, showlegend=True,
+                        text=_fmt_labels(pos) if bar_labels else None,
+                        textposition="outside", **common,
+                    ))
+                    fig.add_trace(go.Bar(
+                        name=col, x=df[x_col], y=neg,
+                        marker_color=_C_NEG, showlegend=False,
+                        text=_fmt_labels(neg) if bar_labels else None,
+                        textposition="outside", **common,
+                    ))
+                else:
+                    fig.add_trace(go.Bar(
+                        name=col, x=df[x_col], y=vals,
+                        marker_color=base, yaxis=yaxis,
+                        offsetgroup=col, cliponaxis=False,
+                        text=_fmt_labels(vals) if bar_labels else None,
+                        textposition="outside",
+                    ))
+
+            elif chart_type == "line":
+                mode = "lines+markers" + ("+text" if line_labels else "")
+                fig.add_trace(go.Scatter(
+                    name=col, x=df[x_col], y=vals,
+                    mode=mode, line_color=base, yaxis=yaxis,
+                    text=_fmt_labels(vals) if line_labels else None,
+                    textposition="top center", textfont=dict(size=10),
+                ))
+                if col_has_neg:
+                    fig.add_hline(y=0, line_width=1, line_dash="dot",
+                                  line_color="rgba(255,255,255,0.25)")
+
+            elif chart_type == "area":
+                mode = "lines" + ("+text" if line_labels else "")
+                fig.add_trace(go.Scatter(
+                    name=col, x=df[x_col], y=vals,
+                    mode=mode, fill="tozeroy", line_color=base, yaxis=yaxis,
+                    text=_fmt_labels(vals) if line_labels else None,
+                    textposition="top center", textfont=dict(size=10),
+                ))
+                if col_has_neg:
+                    fig.add_hline(y=0, line_width=1, line_dash="dot",
+                                  line_color="rgba(255,255,255,0.25)")
+
+            elif chart_type == "scatter":
+                mode = "markers" + ("+text" if scat_labels else "")
+                fig.add_trace(go.Scatter(
+                    name=col, x=df[x_col], y=vals,
+                    mode=mode, marker_color=base, yaxis=yaxis,
+                    text=_fmt_labels(vals) if scat_labels else None,
+                    textposition="top center", textfont=dict(size=10),
+                ))
+
+    # ── Layout ────────────────────────────────────────────────────
+    barmode = "group" if len(all_cols) > 1 else "relative"
+    layout: dict = dict(
+        barmode=barmode,
+        margin=dict(t=44, b=80),
+        legend_title_text="",
+        legend=dict(
+            orientation="h",
+            yanchor="top", y=-0.18,
+            xanchor="center", x=0.5,
+        ),
+        uniformtext_minsize=8,
+        uniformtext_mode="hide",
+    )
+    if y2_cols:
+        layout["yaxis"]  = dict(title=", ".join(y1_cols) if y1_cols else "")
+        layout["yaxis2"] = dict(
+            title=", ".join(y2_cols),
+            overlaying="y", side="right", showgrid=False,
+        )
+        # Align zeros so there is exactly one baseline across both axes
+        r1, r2 = _dual_axis_zero_ranges(y1_cols, y2_cols, df)
+        if r1 is not None:
+            layout["yaxis"]["range"]  = r1
+            layout["yaxis2"]["range"] = r2
+    fig.update_layout(**layout)
+    return fig
+
+
 def _render_chart_dynamic(
     r: QueryResult,
     df: pd.DataFrame,
-    selected: list[str],
-    dim_cols: list[str],
+    y1_cols: list,
+    y2_cols: list,
+    dim_cols: list,
     chart_type_override: str | None = None,
     x_override: str | None = None,
 ) -> bool:
-    """Render a chart using the selected measure columns.
-
-    Falls back gracefully: uses the LLM chart config as hints for chart
-    type and x-axis, then builds with plotly. chart_type_override and
-    x_override take precedence over the LLM suggestion when provided.
-    """
-    if not selected or df.empty:
+    """Render a chart. Returns True if a chart was drawn."""
+    if not y1_cols and not y2_cols or df.empty:
         return False
 
     cfg = r.chart_config or {}
@@ -262,7 +691,6 @@ def _render_chart_dynamic(
     if chart_type == "table_only":
         return False
 
-    # Pick x-axis: user override → LLM suggestion → first dim col
     if x_override and x_override in df.columns:
         x_col = x_override
     else:
@@ -273,23 +701,7 @@ def _render_chart_dynamic(
         return False
 
     try:
-        import plotly.express as px
-        y = selected[0] if len(selected) == 1 else selected
-
-        if chart_type == "line":
-            fig = px.line(df, x=x_col, y=y)
-        elif chart_type == "area":
-            fig = px.area(df, x=x_col, y=y)
-        elif chart_type == "scatter":
-            fig = px.scatter(df, x=x_col, y=selected[0])
-        elif chart_type == "pie" and len(selected) == 1:
-            fig = px.pie(df, names=x_col, values=selected[0])
-        else:
-            # bar — grouped when multiple measures
-            barmode = "group" if len(selected) > 1 else "relative"
-            fig = px.bar(df, x=x_col, y=y, barmode=barmode)
-
-        fig.update_layout(margin=dict(t=30, b=0), legend_title_text="")
+        fig = _build_chart_figure(df, x_col, y1_cols, y2_cols, chart_type)
         st.plotly_chart(fig, use_container_width=True)
         return True
     except Exception:
@@ -332,7 +744,7 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
 
     if elapsed is not None:
         st.markdown(
-            f'<div style="font-size:0.88rem;color:#6b7280;margin:4px 0 12px;font-weight:500;">⏱ {elapsed:.1f}s</div>',
+            f'<div style="font-size:0.82rem;color:#a4a4ad;margin:4px 0 12px;font-weight:500;letter-spacing:0.01em;">⏱ {elapsed:.1f}s</div>',
             unsafe_allow_html=True,
         )
 
@@ -342,15 +754,14 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
         dim_cols = df.select_dtypes(exclude="number").columns.tolist()
         has_chart_data = len(num_cols) >= 1 and len(df.columns) >= 2
 
-        # ── Viz control bar: chart-type | x-axis (dimension) | measures ──
-        ctl1, ctl2, ctl3 = st.columns([2, 2, 4])
+        # ── Viz control bar: chart-type | x-axis | Y1 measures | Y2 (right axis) ──
+        ctl1, ctl2, ctl3, ctl4 = st.columns([2, 2, 3, 3])
         with ctl1:
             viz_choice = st.selectbox(
                 "Chart type",
                 ["auto", "bar", "line", "area", "scatter", "pie", "table only"],
                 key=f"viz_{key}",
                 help="Override the AI-suggested chart type",
-                label_visibility="collapsed",
             )
 
         # Resolve effective chart behaviour
@@ -374,46 +785,51 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
             if show_chart and dim_cols:
                 _all_xax = dim_cols + [c for c in num_cols if c not in dim_cols]
                 x_override = st.selectbox(
-                    "X axis",
+                    "Dimension (X axis)",
                     _all_xax,
                     key=f"xax_{key}",
                     help="Column to use as the X axis / dimension",
-                    label_visibility="collapsed",
                 )
 
-        # Measure multiselect — shown when chart is on + 2+ numeric cols
-        selected_measures = num_cols
+        # Y1 (left axis) measure multiselect
+        y1_measures = num_cols
         with ctl3:
-            if show_chart and len(num_cols) > 1:
-                selected_measures = st.multiselect(
-                    "📊 Measures",
+            if show_chart and num_cols:
+                y1_measures = st.multiselect(
+                    "Measures (left Y)",
                     options=num_cols,
                     default=num_cols,
                     key=f"ms_{key}",
-                    help="Choose which measures to display in the chart",
-                    label_visibility="collapsed",
+                    help="Measures on the left Y axis",
+                    placeholder="Select measures",
                 )
+
+        # Y2 (right axis) — subset of y1_measures; only shown when 2+ numerics available
+        y2_measures: list = []
+        with ctl4:
+            if show_chart and len(num_cols) > 1 and y1_measures:
+                y2_measures = st.multiselect(
+                    "Second axis (right Y)",
+                    options=y1_measures,
+                    default=[],
+                    key=f"y2_{key}",
+                    help="Move these measures to the right Y axis (dual axis)",
+                    placeholder="Select for dual axis",
+                )
+
+        # Effective Y1 = all selected minus those promoted to Y2
+        eff_y1 = [c for c in y1_measures if c not in y2_measures]
 
         # ── Chart rendering ────────────────────────────────────────
         chart_rendered = False
-        if show_chart and selected_measures:
-            if chart_type_override or x_override or len(num_cols) > 1:
-                chart_rendered = _render_chart_dynamic(
-                    r, df, selected_measures, dim_cols,
-                    chart_type_override, x_override,
-                )
-            elif r.chart_obj:
-                lib, chart = r.chart_obj
-                if lib == "plotly":
-                    st.plotly_chart(chart, use_container_width=True)
-                elif lib == "altair":
-                    st.altair_chart(chart, use_container_width=True)
-                chart_rendered = True
+        if show_chart and (eff_y1 or y2_measures):
+            chart_rendered = _render_chart_dynamic(
+                r, df, eff_y1, y2_measures, dim_cols,
+                chart_type_override, x_override,
+            )
 
-        # ── Data table ────────────────────────────────────────────
-        skip_table = chart_rendered and _wants_viz(r.question)
-        if not skip_table:
-            st.dataframe(df, use_container_width=True, height=min(400, 35 * len(df) + 50))
+        # ── Data table (always shown so sorted data is visible) ───
+        st.dataframe(df, use_container_width=True, height=min(400, 35 * len(df) + 50))
 
         col_dl, col_gap = st.columns([1, 6])
         with col_dl:
@@ -425,7 +841,7 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
     # Follow-up suggestions
     if r.followups:
         st.markdown(
-            '<div style="font-size:0.75rem;color:#6b7280;margin-top:12px;margin-bottom:4px;">💡 Suggested follow-ups</div>',
+            '<div style="font-size:0.75rem;color:#a4a4ad;margin-top:12px;margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Suggested follow-ups</div>',
             unsafe_allow_html=True,
         )
         cols = st.columns(len(r.followups))
@@ -443,8 +859,8 @@ with st.sidebar:
     st.divider()
 
     # ── 1. DATABASE ───────────────────────────────────────────────────
-    st.markdown("#### Database")
-    _conn_options = ["DuckDB", "Exasol (pyexasol)", "SQLAlchemy URL"]
+    st.markdown('<p style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#a4a4ad;margin:0 0 8px;">Database</p>', unsafe_allow_html=True)
+    _conn_options = ["DuckDB", "PostgreSQL", "Exasol (pyexasol)", "SQLAlchemy URL"]
     conn_type = st.selectbox("Connection type", _conn_options)
 
     if st.session_state.get("_prev_conn_type") != conn_type:
@@ -461,6 +877,12 @@ with st.sidebar:
             value=_DEFAULT_DUCKDB_PATH,
             placeholder=":memory: or /path/to/file.duckdb",
         )
+    elif conn_type == "PostgreSQL":
+        pg_host = st.text_input("Host", value="localhost")
+        pg_port = st.number_input("Port", value=5432, min_value=1, max_value=65535)
+        pg_db   = st.text_input("Database", placeholder="mydb")
+        pg_user = st.text_input("Username", placeholder="myuser")
+        pg_pass = st.text_input("Password", type="password")
     else:
         db_url = st.text_input("Connection URL", placeholder="sqlite:///data.db")
 
@@ -472,6 +894,11 @@ with st.sidebar:
                     _kw["path"] = duck_path or ":memory:"
                 elif conn_type == "Exasol (pyexasol)":
                     _kw.update(dsn=exa_host, user=exa_user, password=exa_pass)
+                elif conn_type == "PostgreSQL":
+                    _kw["url"] = (
+                        f"postgresql+psycopg://{pg_user}:{pg_pass}"
+                        f"@{pg_host}:{int(pg_port)}/{pg_db}"
+                    )
                 else:
                     _kw["url"] = db_url
                 st.session_state.db_preview = _fetch_db_preview(conn_type, **_kw)
@@ -483,7 +910,7 @@ with st.sidebar:
     st.divider()
 
     # ── 2. ACCESS CONTROL (includes schema selector) ──────────────────
-    st.markdown("#### Access Control")
+    st.markdown('<p style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#a4a4ad;margin:8px 0 8px;">Access Control</p>', unsafe_allow_html=True)
 
     # Schema selector
     if conn_type == "Exasol (pyexasol)":
@@ -500,6 +927,13 @@ with st.sidebar:
             duck_schema = st.selectbox("Schema", _duck_schemas, index=_duck_idx, key="duck_schema_sel")
         else:
             duck_schema = st.text_input("Schema", value="main")
+    elif conn_type == "PostgreSQL":
+        if _preview:
+            _pg_schema_opts = [s for s in _preview["schemas"] if s not in ("information_schema", "pg_catalog", "pg_toast")]
+            _pg_idx = _pg_schema_opts.index("public") if "public" in _pg_schema_opts else 0
+            pg_schema = st.selectbox("Schema", _pg_schema_opts, index=_pg_idx, key="pg_schema_sel")
+        else:
+            pg_schema = st.text_input("Schema", value="public")
 
     # Table restriction
     if _preview:
@@ -508,6 +942,8 @@ with st.sidebar:
             _ac_schema = exa_schema or None
         elif conn_type == "DuckDB":
             _ac_schema = duck_schema or None
+        elif conn_type == "PostgreSQL":
+            _ac_schema = pg_schema or None
 
         if _ac_schema and _ac_schema in _preview["tables_by_schema"]:
             _avail_tables = _preview["tables_by_schema"][_ac_schema]
@@ -586,6 +1022,15 @@ with st.sidebar:
                         st.error("Enter a database path.")
                         st.stop()
                     config = ConnectionConfig.duckdb(path=duck_path)
+                elif conn_type == "PostgreSQL":
+                    if not pg_db or not pg_user:
+                        st.error("Fill in database name and username.")
+                        st.stop()
+                    _pg_url = (
+                        f"postgresql+psycopg://{pg_user}:{pg_pass}"
+                        f"@{pg_host}:{int(pg_port)}/{pg_db}"
+                    )
+                    config = ConnectionConfig.from_url(_pg_url)
                 else:
                     if not db_url:
                         st.error("Enter a database URL.")
@@ -610,6 +1055,8 @@ with st.sidebar:
                     schema_param = exa_schema or None
                 elif conn_type == "DuckDB":
                     schema_param = duck_schema if duck_schema and duck_schema != "main" else None
+                elif conn_type == "PostgreSQL":
+                    schema_param = pg_schema if pg_schema and pg_schema != "public" else None
                 else:
                     schema_param = None
 
@@ -630,9 +1077,7 @@ with st.sidebar:
             st.session_state.connected = True
             st.session_state.messages = []
             st.session_state.pending_question = None
-
-            with st.spinner("Generating starter questions..."):
-                st.session_state.explore_questions = chat.generate_explore_questions()
+            st.session_state.explore_questions = None  # None = pending generation
 
             st.success(
                 f"Connected! {len(chat.schema_context.tables)} tables "
@@ -777,7 +1222,7 @@ _n_tables = len(_chat_ref.schema_context.tables)
 st.markdown(
     f'<div style="position:fixed;top:0.45rem;right:1.2rem;z-index:9999;'
     f'background:#0d1f0d;border:1px solid rgba(34,197,94,0.55);border-radius:6px;'
-    f'padding:3px 12px;font-size:0.72rem;color:#22c55e;font-weight:600;'
+    f'padding:3px 12px;font-size:0.72rem;color:#29ad7f;font-weight:600;'
     f'letter-spacing:0.03em;box-shadow:0 1px 4px rgba(0,0,0,0.4);">'
     f'✅ {_dial} · {_n_tables} tables</div>',
     unsafe_allow_html=True,
@@ -804,7 +1249,7 @@ _stc.html(
                     el.style.position  = 'sticky';
                     el.style.top       = '2.75rem';
                     el.style.zIndex    = '100';
-                    el.style.background = '#0e1117';
+                    el.style.background = '#161d26';
                     el.style.paddingBottom = '2px';
                     break;
                 }
@@ -826,18 +1271,25 @@ tab_ask, tab_build, tab_metrics, tab_schema = st.tabs(
 # ── ASK tab ──────────────────────────────────────────────────────────
 with tab_ask:
     # Explore question grid — shown only before the first message
-    if not st.session_state.messages and st.session_state.explore_questions:
-        st.markdown("#### Where do you want to start?")
-        eq = st.session_state.explore_questions
-        row1, row2 = eq[:3], eq[3:]
-        for row in [row1, row2]:
-            cols = st.columns(len(row))
-            for col, q in zip(cols, row):
-                with col:
-                    if st.button(q, use_container_width=True, key=f"eq_{hash(q)}"):
-                        st.session_state.pending_question = q
-                        st.rerun()
-        st.divider()
+    if not st.session_state.messages:
+        # Lazy-load: generate on first render after connect, not during connect
+        if st.session_state.explore_questions is None and st.session_state.connected and st.session_state.chat:
+            with st.spinner("Generating starter questions…"):
+                st.session_state.explore_questions = st.session_state.chat.generate_explore_questions() or []
+            st.rerun()
+
+        if st.session_state.explore_questions:
+            st.markdown("#### Where do you want to start?")
+            eq = st.session_state.explore_questions
+            row1, row2 = eq[:3], eq[3:]
+            for row in [row1, row2]:
+                cols = st.columns(len(row))
+                for col, q in zip(cols, row):
+                    with col:
+                        if st.button(q, use_container_width=True, key=f"eq_{hash(q)}"):
+                            st.session_state.pending_question = q
+                            st.rerun()
+            st.divider()
 
     # Render conversation history — always drives the display order
     for msg in st.session_state.messages:
@@ -950,9 +1402,9 @@ with tab_schema:
 
         mermaid_src = "\n".join(mer_lines)
 
-        # Estimate iframe height based on total column count
+        # Height: scale with content but never go tiny or huge
         _total_rows = sum(min(len(t.columns), 30) + 3 for t in tables)
-        _height = max(500, min(1200, _total_rows * 24 + len(tables) * 60))
+        _height = max(220, min(1200, _total_rows * 28 + 80))
 
         # JSON-encode the source so special chars in names are safe in JS
         import json as _json
@@ -965,8 +1417,9 @@ with tab_schema:
 <meta charset="utf-8">
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
-  html, body {{ margin: 0; padding: 0; background: #0e1117; overflow: auto; }}
-  #diagram svg {{ max-width: 100% !important; }}
+  html, body {{ margin: 0; padding: 8px; background: #161d26; overflow: auto; box-sizing: border-box; }}
+  #diagram {{ display: flex; justify-content: center; align-items: flex-start; }}
+  #diagram svg {{ max-width: 100% !important; height: auto !important; }}
   #errmsg {{ color: #f88; font-family: monospace; white-space: pre-wrap; padding: 12px; }}
 </style>
 </head>
@@ -978,13 +1431,20 @@ with tab_schema:
     theme: 'dark',
     er: {{
       layoutDirection: 'LR',
-      diagramPadding: 24,
-      entityPadding: 14,
-      useMaxWidth: true
+      diagramPadding: 20,
+      entityPadding: 12,
+      useMaxWidth: false
     }}
   }});
   mermaid.render('er1', {_mer_js}).then(function(r) {{
-    document.getElementById('diagram').innerHTML = r.svg;
+    var el = document.getElementById('diagram');
+    el.innerHTML = r.svg;
+    // Let parent know the natural rendered height so the iframe can shrink/grow
+    var svg = el.querySelector('svg');
+    if (svg) {{
+      var h = svg.getBoundingClientRect().height || svg.viewBox.baseVal.height;
+      if (h > 0) window.parent.postMessage({{ type: 'mermaid-height', height: Math.ceil(h) + 24 }}, '*');
+    }}
   }}).catch(function(e) {{
     document.getElementById('diagram').innerHTML =
       '<pre id="errmsg">Mermaid render error:\\n' + e.message + '</pre>';
@@ -1008,7 +1468,7 @@ with tab_schema:
     col_jp, col_nj = st.columns(2)
 
     with col_jp:
-        st.markdown("#### ✅ Detected join paths")
+        st.markdown('<p style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#29ad7f;margin:16px 0 8px;">✅ Detected join paths</p>', unsafe_allow_html=True)
         if jmap["joins"]:
             for j in jmap["joins"]:
                 badge_color = "#22c55e" if j["match"] == "exact" else "#fb923c"
@@ -1022,7 +1482,7 @@ with tab_schema:
             st.caption("No shared columns detected between any table pair.")
 
     with col_nj:
-        st.markdown("#### ⚠️ No direct join path")
+        st.markdown('<p style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#f0a800;margin:16px 0 8px;">⚠ No direct join path</p>', unsafe_allow_html=True)
         if jmap["no_join"]:
             st.caption(
                 "These pairs share no column — requires an intermediate table. "
@@ -1031,42 +1491,7 @@ with tab_schema:
             for t1, t2 in jmap["no_join"]:
                 st.markdown(
                     f'`{t1}` **↔** `{t2}` '
-                    '<span style="color:#ef4444;font-size:0.74rem">no shared column</span>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("All table pairs have at least one detected join path.")
-
-    st.divider()
-
-    # ── Join summary panels ────────────────────────────────────────
-    col_jp, col_nj = st.columns(2)
-
-    with col_jp:
-        st.markdown("#### ✅ Detected join paths")
-        if jmap["joins"]:
-            for j in jmap["joins"]:
-                badge_color = "#22c55e" if j["match"] == "exact" else "#fb923c"
-                badge_label = j["match"]
-                st.markdown(
-                    f'`{j["t1"]}.{j["c1"]}` **=** `{j["t2"]}.{j["c2"]}` &nbsp;'
-                    f'<span style="color:{badge_color};font-size:0.74rem">{badge_label}</span>',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.caption("No shared columns detected between any table pair.")
-
-    with col_nj:
-        st.markdown("#### ⚠️ No direct join path")
-        if jmap["no_join"]:
-            st.caption(
-                "These pairs share no column — requires an intermediate table. "
-                "The LLM is told not to attempt direct JOINs between them."
-            )
-            for t1, t2 in jmap["no_join"]:
-                st.markdown(
-                    f'`{t1}` **↔** `{t2}` '
-                    '<span style="color:#ef4444;font-size:0.74rem">no shared column</span>',
+                    '<span style="color:#d13212;font-size:0.74rem">no shared column</span>',
                     unsafe_allow_html=True,
                 )
         else:
