@@ -1,0 +1,145 @@
+[
+  {
+    "id": "sc_days_on_hand",
+    "title": "Inventory days on hand (DOH)",
+    "intent_tags": ["days on hand", "inventory days", "doh", "stock coverage", "days of inventory"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "intermediate",
+    "pattern_type": "metric",
+    "template": "SELECT product_id, AVG(current_stock) as avg_stock, SUM(units_sold) / NULLIF(COUNT(DISTINCT date), 0) as avg_daily_demand, AVG(current_stock) / NULLIF(SUM(units_sold) / NULLIF(COUNT(DISTINCT date), 0), 0) as days_on_hand FROM inventory_snapshots JOIN daily_sales USING(product_id) WHERE snapshot_date >= CURRENT_DATE - 30 GROUP BY 1 ORDER BY days_on_hand ASC",
+    "when_to_use": ["inventory days on hand", "stock coverage", "how many days before stockout"],
+    "anti_patterns": [
+      "using total stock / average monthly demand — always use daily demand for DOH to catch fast-moving SKUs",
+      "including safety stock in current_stock without separating it — inflates coverage metrics"
+    ],
+    "related_patterns": ["sc_stockout", "sc_reorder_point"]
+  },
+  {
+    "id": "sc_stockout",
+    "title": "Stockout detection and frequency",
+    "intent_tags": ["stockout", "out of stock", "zero inventory", "stock shortage", "oos"],
+    "sql_features": ["cte", "window"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH date_spine AS (SELECT generate_series(:start::date, :end::date, '1 day'::interval)::date as date), inventory_daily AS (SELECT d.date, p.product_id, COALESCE(i.stock_level, 0) as stock FROM date_spine d CROSS JOIN (SELECT DISTINCT product_id FROM products) p LEFT JOIN inventory_snapshots i ON d.date = i.snapshot_date AND p.product_id = i.product_id) SELECT product_id, COUNT(CASE WHEN stock = 0 THEN 1 END) as stockout_days, COUNT(*) as total_days, COUNT(CASE WHEN stock = 0 THEN 1 END) * 1.0 / COUNT(*) as stockout_rate FROM inventory_daily GROUP BY 1 ORDER BY stockout_rate DESC",
+    "when_to_use": ["stockout days", "out of stock frequency", "which products run out most"],
+    "anti_patterns": [
+      "using only snapshot dates without a date spine — gaps in snapshots are treated as in-stock when they may be stockouts"
+    ],
+    "related_patterns": ["sc_days_on_hand", "sc_fill_rate"]
+  },
+  {
+    "id": "sc_reorder_point",
+    "title": "Reorder point calculation with safety stock",
+    "intent_tags": ["reorder point", "rop", "safety stock", "reorder level", "when to order"],
+    "sql_features": ["aggregation", "cte"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH demand_stats AS (SELECT product_id, AVG(daily_units_sold) as avg_daily_demand, STDDEV(daily_units_sold) as stddev_demand FROM daily_sales WHERE sale_date >= CURRENT_DATE - 90 GROUP BY 1), lead_times AS (SELECT product_id, AVG(lead_time_days) as avg_lead_time, MAX(lead_time_days) as max_lead_time FROM purchase_orders WHERE status='received' GROUP BY 1) SELECT d.product_id, d.avg_daily_demand, l.avg_lead_time, d.avg_daily_demand * l.avg_lead_time as cycle_stock, 1.65 * d.stddev_demand * SQRT(l.avg_lead_time) as safety_stock_95pct, d.avg_daily_demand * l.avg_lead_time + 1.65 * d.stddev_demand * SQRT(l.avg_lead_time) as reorder_point FROM demand_stats d JOIN lead_times l USING(product_id)",
+    "when_to_use": ["reorder point", "when to restock", "safety stock level", "replenishment trigger"],
+    "anti_patterns": [
+      "computing ROP without safety stock — ROP = avg_demand * avg_lead_time only works in a deterministic world with no demand or supply variance",
+      "using max lead time instead of avg + buffer — overstates safety stock"
+    ],
+    "related_patterns": ["sc_days_on_hand", "sc_stockout", "sc_lead_time"]
+  },
+  {
+    "id": "sc_lead_time",
+    "title": "Supplier lead time analysis",
+    "intent_tags": ["lead time", "supplier lead time", "delivery time", "purchase order lead time", "supplier speed"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT supplier_id, product_id, COUNT(*) as orders, AVG(DATE_DIFF('day', order_date, receipt_date)) as avg_lead_time, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY DATE_DIFF('day', order_date, receipt_date)) as median_lead_time, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY DATE_DIFF('day', order_date, receipt_date)) as p90_lead_time, MAX(DATE_DIFF('day', order_date, receipt_date)) as max_lead_time FROM purchase_orders WHERE status = 'received' AND order_date >= CURRENT_DATE - 365 GROUP BY 1, 2 ORDER BY avg_lead_time DESC",
+    "when_to_use": ["supplier lead time", "delivery reliability", "worst-case lead time for safety stock"],
+    "anti_patterns": [
+      "using mean lead time for safety stock calculations — p90 or max is safer; mean understates variance"
+    ],
+    "related_patterns": ["sc_reorder_point", "sc_supplier_scorecard"]
+  },
+  {
+    "id": "sc_fill_rate",
+    "title": "Order fill rate / service level",
+    "intent_tags": ["fill rate", "service level", "order fulfillment", "line fill rate", "perfect order rate"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT DATE_TRUNC('month', order_date) as month, COUNT(DISTINCT order_id) as orders, COUNT(DISTINCT CASE WHEN fulfilled_qty >= ordered_qty THEN order_line_id END) as fully_filled_lines, COUNT(DISTINCT order_line_id) as total_lines, COUNT(DISTINCT CASE WHEN fulfilled_qty >= ordered_qty THEN order_line_id END) * 1.0 / NULLIF(COUNT(DISTINCT order_line_id), 0) as line_fill_rate, SUM(fulfilled_qty) * 1.0 / NULLIF(SUM(ordered_qty), 0) as unit_fill_rate FROM order_lines GROUP BY 1 ORDER BY 1",
+    "when_to_use": ["fill rate", "service level", "how many orders are fully fulfilled"],
+    "anti_patterns": [
+      "computing fill rate at order level instead of line level — one short line on a 10-line order fails the whole order"
+    ],
+    "related_patterns": ["sc_stockout", "sc_supplier_scorecard"]
+  },
+  {
+    "id": "sc_demand_forecast",
+    "title": "Demand forecasting via moving average",
+    "intent_tags": ["demand forecast", "moving average", "sales forecast", "demand planning", "inventory forecast"],
+    "sql_features": ["window", "cte"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH daily AS (SELECT product_id, sale_date, SUM(units_sold) as units FROM daily_sales GROUP BY 1, 2) SELECT product_id, sale_date, units, AVG(units) OVER (PARTITION BY product_id ORDER BY sale_date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) as ma_7d, AVG(units) OVER (PARTITION BY product_id ORDER BY sale_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as ma_30d, AVG(units) OVER (PARTITION BY product_id ORDER BY sale_date ROWS BETWEEN 89 PRECEDING AND CURRENT ROW) as ma_90d FROM daily",
+    "when_to_use": ["demand forecast", "smoothed demand", "short vs long term demand signal"],
+    "anti_patterns": [
+      "forecasting with raw daily demand without smoothing — noise in daily data causes wild swings in reorder quantities",
+      "using a single moving average window for all SKUs — fast movers need shorter windows; slow movers need longer"
+    ],
+    "related_patterns": ["sc_reorder_point", "sc_days_on_hand"]
+  },
+  {
+    "id": "sc_dead_stock",
+    "title": "Dead stock identification",
+    "intent_tags": ["dead stock", "obsolete inventory", "slow moving inventory", "no movement", "write off candidates"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT i.product_id, i.current_stock, i.stock_value, COALESCE(MAX(s.sale_date), i.received_date) as last_movement_date, CURRENT_DATE - COALESCE(MAX(s.sale_date), i.received_date) as days_no_movement, CASE WHEN CURRENT_DATE - COALESCE(MAX(s.sale_date), i.received_date) > 180 THEN 'dead' WHEN CURRENT_DATE - COALESCE(MAX(s.sale_date), i.received_date) > 90 THEN 'slow_moving' ELSE 'active' END as stock_status FROM inventory i LEFT JOIN daily_sales s ON i.product_id = s.product_id AND s.sale_date >= CURRENT_DATE - 365 WHERE i.current_stock > 0 GROUP BY i.product_id, i.current_stock, i.stock_value, i.received_date ORDER BY days_no_movement DESC",
+    "when_to_use": ["dead stock", "slow moving inventory", "write-off candidates", "obsolete stock"],
+    "anti_patterns": [
+      "checking only recent sales without including the received date as fallback — new products never sold before will appear dead"
+    ],
+    "related_patterns": ["sc_days_on_hand", "sc_stockout"]
+  },
+  {
+    "id": "sc_supplier_scorecard",
+    "title": "Supplier performance scorecard",
+    "intent_tags": ["supplier scorecard", "supplier performance", "vendor rating", "on time delivery", "supplier quality"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT supplier_id, COUNT(*) as total_orders, AVG(DATE_DIFF('day', order_date, receipt_date)) as avg_lead_time, COUNT(CASE WHEN receipt_date <= promised_date THEN 1 END) * 1.0 / COUNT(*) as on_time_rate, SUM(received_qty) * 1.0 / NULLIF(SUM(ordered_qty), 0) as fill_rate, COUNT(CASE WHEN quality_reject_qty > 0 THEN 1 END) * 1.0 / COUNT(*) as defect_rate, AVG(unit_price) as avg_unit_price FROM purchase_orders WHERE status = 'received' AND order_date >= CURRENT_DATE - 365 GROUP BY 1 ORDER BY on_time_rate DESC",
+    "when_to_use": ["supplier ranking", "vendor scorecard", "on-time delivery rate", "supplier quality"],
+    "anti_patterns": [
+      "ranking suppliers by price alone — a cheap supplier with a 60% on-time rate has hidden costs in stockouts and emergency freight"
+    ],
+    "related_patterns": ["sc_lead_time", "sc_fill_rate"]
+  },
+  {
+    "id": "sc_inventory_turnover",
+    "title": "Inventory turnover and weeks of supply",
+    "intent_tags": ["inventory turnover", "stock turnover", "weeks of supply", "wos", "inventory efficiency"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "intermediate",
+    "pattern_type": "metric",
+    "template": "SELECT product_id, category, SUM(cogs) as annual_cogs, AVG(avg_inventory_value) as avg_inventory, SUM(cogs) / NULLIF(AVG(avg_inventory_value), 0) as inventory_turns, 52.0 / NULLIF(SUM(cogs) / NULLIF(AVG(avg_inventory_value), 0), 0) as weeks_of_supply FROM inventory_cogs_monthly GROUP BY 1, 2 ORDER BY inventory_turns ASC",
+    "when_to_use": ["inventory turnover", "weeks of supply", "how efficiently inventory is used"],
+    "anti_patterns": [
+      "using revenue instead of COGS in the numerator — COGS and inventory are on the same cost basis; revenue introduces gross margin distortion"
+    ],
+    "related_patterns": ["sc_days_on_hand", "sc_dead_stock"]
+  },
+  {
+    "id": "sc_order_cycle_time",
+    "title": "Order-to-delivery cycle time",
+    "intent_tags": ["order cycle time", "delivery time", "order to ship", "fulfillment time", "time to deliver"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT fulfillment_center, DATE_TRUNC('month', order_date) as month, COUNT(DISTINCT order_id) as orders, AVG(DATE_DIFF('hour', order_placed_at, shipped_at)) as avg_hours_to_ship, AVG(DATE_DIFF('day', order_placed_at, delivered_at)) as avg_days_to_deliver, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY DATE_DIFF('day', order_placed_at, delivered_at)) as p95_delivery_days FROM orders WHERE delivered_at IS NOT NULL GROUP BY 1, 2",
+    "when_to_use": ["delivery speed", "order fulfillment time", "SLA compliance", "time to ship"],
+    "anti_patterns": [
+      "averaging delivery days without percentile — p95 is what customers at the tail experience and determines SLA breach rate"
+    ],
+    "related_patterns": ["sc_fill_rate", "sc_supplier_scorecard"]
+  }
+]

@@ -1,0 +1,115 @@
+[
+  {
+    "id": "pl_waterfall",
+    "title": "Full P&L waterfall (Revenue → Gross Profit → EBITDA → Net Income)",
+    "intent_tags": ["p&l waterfall", "profit and loss", "income statement", "ebitda", "net income", "gross profit waterfall"],
+    "sql_features": ["cte", "aggregation", "grouping sets"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH journal AS (SELECT account_category, account_subcategory, SUM(amount) as total FROM journal_entries WHERE period BETWEEN :start AND :end GROUP BY 1, 2) SELECT account_category, account_subcategory, SUM(total) as amount, SUM(SUM(total)) OVER (PARTITION BY account_category) as category_total FROM journal GROUP BY ROLLUP(account_category, account_subcategory) ORDER BY account_category, account_subcategory",
+    "when_to_use": ["full P&L", "income statement", "EBITDA calculation", "profit waterfall"],
+    "anti_patterns": [
+      "mixing accrual and cash entries in the same P&L — always filter by accounting_basis",
+      "using alphabetical ORDER BY — P&L must follow the income statement hierarchy: Revenue → COGS → Gross Profit → OpEx → EBITDA → D&A → EBIT → Interest → Tax → Net Income"
+    ],
+    "related_patterns": ["pl_segment", "pl_bridge", "fin_gross_margin"]
+  },
+  {
+    "id": "pl_segment",
+    "title": "Segment / business unit P&L",
+    "intent_tags": ["segment p&l", "business unit profit", "division p&l", "product line profitability", "segment income"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "SELECT segment, SUM(CASE WHEN account_type='revenue' THEN amount ELSE 0 END) as revenue, SUM(CASE WHEN account_type='cogs' THEN amount ELSE 0 END) as cogs, SUM(CASE WHEN account_type='revenue' THEN amount ELSE 0 END) - SUM(CASE WHEN account_type='cogs' THEN amount ELSE 0 END) as gross_profit, SUM(CASE WHEN account_type='direct_opex' THEN amount ELSE 0 END) as direct_opex, SUM(CASE WHEN account_type='revenue' THEN amount ELSE 0 END) - SUM(CASE WHEN account_type IN ('cogs','direct_opex') THEN amount ELSE 0 END) as contribution_margin FROM segment_journal WHERE period = :period GROUP BY 1",
+    "when_to_use": ["P&L by segment", "contribution margin by business unit", "segment profitability"],
+    "anti_patterns": [
+      "allocating shared overheads arbitrarily to segments without a documented methodology — contribution margin (before shared costs) is more reliable for segment comparison"
+    ],
+    "related_patterns": ["pl_waterfall", "pl_variance"]
+  },
+  {
+    "id": "pl_variance",
+    "title": "P&L variance vs prior period and budget",
+    "intent_tags": ["p&l variance", "budget vs actual", "prior period comparison", "income statement variance"],
+    "sql_features": ["join", "cte"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH current AS (SELECT account_line, SUM(amount) as actual FROM journal_entries WHERE period = :current_period GROUP BY 1), prior AS (SELECT account_line, SUM(amount) as prior_actual FROM journal_entries WHERE period = :prior_period GROUP BY 1), budget AS (SELECT account_line, SUM(amount) as budgeted FROM budget_entries WHERE period = :current_period GROUP BY 1) SELECT c.account_line, c.actual, p.prior_actual, c.actual - p.prior_actual as vs_prior, (c.actual - p.prior_actual) / NULLIF(ABS(p.prior_actual), 0) as vs_prior_pct, b.budgeted, c.actual - b.budgeted as vs_budget FROM current c LEFT JOIN prior p USING(account_line) LEFT JOIN budget b USING(account_line)",
+    "when_to_use": ["P&L variance analysis", "budget vs actual", "YoY income statement comparison"],
+    "anti_patterns": [
+      "using INNER JOIN — drops lines that exist in budget but have zero actuals or vice versa; always LEFT JOIN and COALESCE"
+    ],
+    "related_patterns": ["pl_waterfall", "pl_segment"]
+  },
+  {
+    "id": "pl_contribution_margin",
+    "title": "Contribution margin by product / SKU",
+    "intent_tags": ["contribution margin", "product margin", "sku profitability", "variable margin", "direct margin"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "intermediate",
+    "pattern_type": "metric",
+    "template": "SELECT p.product_id, p.product_name, p.category, SUM(oi.quantity * oi.unit_price) as revenue, SUM(oi.quantity * p.unit_cogs) as variable_cost, SUM(oi.quantity * oi.unit_price) - SUM(oi.quantity * p.unit_cogs) as contribution_margin, (SUM(oi.quantity * oi.unit_price) - SUM(oi.quantity * p.unit_cogs)) / NULLIF(SUM(oi.quantity * oi.unit_price), 0) as cm_ratio FROM order_items oi JOIN products p ON oi.product_id = p.product_id WHERE oi.order_date BETWEEN :start AND :end GROUP BY 1, 2, 3 ORDER BY cm_ratio DESC",
+    "when_to_use": ["contribution margin", "which products are profitable", "variable margin by SKU"],
+    "anti_patterns": [
+      "including fixed overhead in variable cost — contribution margin should only deduct truly variable costs (COGS, direct labour, commissions)"
+    ],
+    "related_patterns": ["pl_segment", "pl_breakeven"]
+  },
+  {
+    "id": "pl_breakeven",
+    "title": "Break-even analysis",
+    "intent_tags": ["break even", "breakeven", "break even point", "fixed costs", "units to break even"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH economics AS (SELECT SUM(CASE WHEN cost_type='fixed' THEN amount ELSE 0 END) as fixed_costs, SUM(CASE WHEN cost_type='variable' THEN amount ELSE 0 END) / NULLIF(SUM(CASE WHEN cost_type='variable' THEN units ELSE 0 END), 0) as variable_cost_per_unit, AVG(selling_price) as avg_selling_price FROM cost_structure) SELECT fixed_costs, avg_selling_price, variable_cost_per_unit, avg_selling_price - variable_cost_per_unit as contribution_per_unit, fixed_costs / NULLIF(avg_selling_price - variable_cost_per_unit, 0) as breakeven_units, fixed_costs / NULLIF(1 - variable_cost_per_unit / NULLIF(avg_selling_price, 0), 0) as breakeven_revenue FROM economics",
+    "when_to_use": ["break-even point", "units to cover fixed costs", "minimum revenue to be profitable"],
+    "anti_patterns": [
+      "using revenue instead of selling price per unit — causes circular reference in the formula"
+    ],
+    "related_patterns": ["pl_contribution_margin", "pl_waterfall"]
+  },
+  {
+    "id": "pl_ebitda_bridge",
+    "title": "EBITDA bridge (waterfall from prior to current period)",
+    "intent_tags": ["ebitda bridge", "earnings bridge", "profit bridge", "variance decomposition", "p&l bridge"],
+    "sql_features": ["cte", "join"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH period_pl AS (SELECT period, SUM(CASE WHEN type='revenue' THEN amount ELSE 0 END) as revenue, SUM(CASE WHEN type='cogs' THEN amount ELSE 0 END) as cogs, SUM(CASE WHEN type='opex' THEN amount ELSE 0 END) as opex FROM journal_entries WHERE period IN (:prior, :current) GROUP BY 1) SELECT 'Revenue change' as driver, c.revenue - p.revenue as impact FROM period_pl p, period_pl c WHERE p.period=:prior AND c.period=:current UNION ALL SELECT 'COGS change', -(c.cogs - p.cogs) FROM period_pl p, period_pl c WHERE p.period=:prior AND c.period=:current UNION ALL SELECT 'OpEx change', -(c.opex - p.opex) FROM period_pl p, period_pl c WHERE p.period=:prior AND c.period=:current",
+    "when_to_use": ["EBITDA bridge", "what drove profit change", "P&L waterfall vs prior period"],
+    "anti_patterns": [
+      "presenting raw amounts without sign convention — costs increasing should show as negative impact on EBITDA"
+    ],
+    "related_patterns": ["pl_waterfall", "pl_variance"]
+  },
+  {
+    "id": "pl_operating_leverage",
+    "title": "Operating leverage measurement",
+    "intent_tags": ["operating leverage", "fixed vs variable costs", "revenue sensitivity", "cost structure"],
+    "sql_features": ["cte", "window"],
+    "difficulty": "advanced",
+    "pattern_type": "metric",
+    "template": "WITH monthly AS (SELECT DATE_TRUNC('month', date) as month, SUM(revenue) as revenue, SUM(ebitda) as ebitda FROM monthly_financials GROUP BY 1) SELECT month, revenue, ebitda, (ebitda - LAG(ebitda) OVER (ORDER BY month)) / NULLIF(LAG(ebitda) OVER (ORDER BY month), 0) as ebitda_growth, (revenue - LAG(revenue) OVER (ORDER BY month)) / NULLIF(LAG(revenue) OVER (ORDER BY month), 0) as revenue_growth, ((ebitda - LAG(ebitda) OVER (ORDER BY month)) / NULLIF(LAG(ebitda) OVER (ORDER BY month), 0)) / NULLIF((revenue - LAG(revenue) OVER (ORDER BY month)) / NULLIF(LAG(revenue) OVER (ORDER BY month), 0), 0) as operating_leverage FROM monthly",
+    "when_to_use": ["operating leverage", "how fast profits grow vs revenue", "fixed cost base efficiency"],
+    "anti_patterns": [
+      "computing operating leverage on a single period — it requires at least two periods and is most meaningful over a full economic cycle"
+    ],
+    "related_patterns": ["pl_breakeven", "pl_waterfall"]
+  },
+  {
+    "id": "pl_ttm",
+    "title": "Trailing twelve months (TTM) P&L",
+    "intent_tags": ["ttm", "trailing twelve months", "rolling 12 month", "ltm", "last twelve months p&l"],
+    "sql_features": ["window", "cte"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT period, SUM(revenue) OVER (ORDER BY period ROWS BETWEEN 11 PRECEDING AND CURRENT ROW) as ttm_revenue, SUM(gross_profit) OVER (ORDER BY period ROWS BETWEEN 11 PRECEDING AND CURRENT ROW) as ttm_gross_profit, SUM(ebitda) OVER (ORDER BY period ROWS BETWEEN 11 PRECEDING AND CURRENT ROW) as ttm_ebitda FROM monthly_pl WHERE period >= ADD_MONTHS(CURRENT_DATE, -24)",
+    "when_to_use": ["TTM revenue", "rolling 12 month P&L", "LTM financials for valuation"],
+    "anti_patterns": [
+      "using ROWS BETWEEN 12 PRECEDING — this includes 13 months; correct is 11 PRECEDING AND CURRENT ROW"
+    ],
+    "related_patterns": ["pl_waterfall", "fin_mom_growth"]
+  }
+]

@@ -1,0 +1,129 @@
+[
+  {
+    "id": "vd_redemption_rate",
+    "title": "Voucher redemption rate",
+    "intent_tags": ["redemption rate", "voucher redemption", "coupon redemption", "discount code usage"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT v.voucher_code, v.issued_count, COUNT(DISTINCT o.order_id) as redeemed, COUNT(DISTINCT o.order_id) * 1.0 / NULLIF(v.issued_count, 0) as redemption_rate FROM vouchers v LEFT JOIN orders o ON v.voucher_code = o.voucher_code GROUP BY 1, 2 ORDER BY redemption_rate DESC",
+    "when_to_use": ["voucher redemption rate", "coupon effectiveness", "code uptake"],
+    "anti_patterns": [
+      "computing redemption_rate as redemptions / total_orders instead of redemptions / vouchers_issued — denominator must be how many were distributed",
+      "not LEFT JOINing — INNER JOIN drops never-redeemed codes and inflates the rate"
+    ],
+    "related_patterns": ["vd_discount_depth", "vd_incrementality"]
+  },
+  {
+    "id": "vd_discount_depth",
+    "title": "Average discount depth by campaign",
+    "intent_tags": ["discount depth", "average discount", "discount percentage", "markdown rate"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT voucher_campaign, COUNT(DISTINCT order_id) as orders, SUM(discount_amount) as total_discount, SUM(order_total_before_discount) as gross_revenue, AVG(discount_amount / NULLIF(order_total_before_discount, 0)) as avg_discount_depth FROM orders WHERE voucher_code IS NOT NULL GROUP BY 1 ORDER BY avg_discount_depth DESC",
+    "when_to_use": ["discount depth", "markdown analysis", "average discount by campaign"],
+    "anti_patterns": [
+      "averaging percentages instead of computing aggregate_discount / aggregate_revenue — per-order averages are distorted by small orders with large flat discounts"
+    ],
+    "related_patterns": ["vd_redemption_rate", "vd_revenue_impact"]
+  },
+  {
+    "id": "vd_revenue_impact",
+    "title": "Net revenue impact of discount codes",
+    "intent_tags": ["discount revenue impact", "voucher revenue", "net revenue after discount", "promo cost"],
+    "sql_features": ["aggregation", "cte"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH promo AS (SELECT voucher_code, SUM(order_total_before_discount) as gross_revenue, SUM(discount_amount) as total_discount, SUM(order_total_after_discount) as net_revenue, COUNT(DISTINCT order_id) as orders FROM orders WHERE voucher_code IS NOT NULL GROUP BY 1), baseline AS (SELECT AVG(order_total_after_discount) as avg_order_no_promo FROM orders WHERE voucher_code IS NULL) SELECT p.*, b.avg_order_no_promo, net_revenue - (orders * b.avg_order_no_promo) as incremental_revenue_vs_baseline FROM promo p CROSS JOIN baseline b",
+    "when_to_use": ["promo P&L", "incremental revenue from vouchers", "cost of discount programme"],
+    "anti_patterns": [
+      "treating all discounted revenue as additive — some orders would have happened without a code (cannibalisation)"
+    ],
+    "related_patterns": ["vd_incrementality", "vd_discount_depth"]
+  },
+  {
+    "id": "vd_incrementality",
+    "title": "Voucher incrementality — new spend vs cannibalised spend",
+    "intent_tags": ["incrementality", "incremental revenue", "voucher cannibalisation", "would have bought anyway"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH voucher_users AS (SELECT DISTINCT customer_id FROM orders WHERE voucher_code IS NOT NULL AND order_date BETWEEN :start AND :end), pre_voucher AS (SELECT o.customer_id, AVG(o.order_total_after_discount) as avg_order_pre FROM orders o JOIN voucher_users v USING(customer_id) WHERE o.order_date < :start AND o.voucher_code IS NULL GROUP BY 1), post_voucher AS (SELECT o.customer_id, AVG(o.order_total_after_discount) as avg_order_post FROM orders o JOIN voucher_users v USING(customer_id) WHERE o.order_date BETWEEN :start AND :end GROUP BY 1) SELECT AVG(avg_order_post - avg_order_pre) as avg_incremental_spend_per_customer FROM pre_voucher JOIN post_voucher USING(customer_id)",
+    "when_to_use": ["voucher incrementality", "cannibalisation test", "did discount drive new spend"],
+    "anti_patterns": [
+      "comparing voucher vs non-voucher users without controlling for selection bias — customers who seek vouchers are not representative of the overall base"
+    ],
+    "related_patterns": ["vd_revenue_impact", "vd_redemption_rate"]
+  },
+  {
+    "id": "vd_abuse_detection",
+    "title": "Voucher abuse detection (multiple redemptions)",
+    "intent_tags": ["voucher abuse", "coupon abuse", "multiple redemptions", "fraud detection", "promo abuse"],
+    "sql_features": ["aggregation", "window"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT customer_id, email, COUNT(DISTINCT voucher_code) as codes_used, COUNT(DISTINCT order_id) as promo_orders, COUNT(DISTINCT device_fingerprint) as devices, COUNT(DISTINCT shipping_address_hash) as addresses, CASE WHEN COUNT(DISTINCT voucher_code) > 3 OR COUNT(DISTINCT device_fingerprint) = 1 AND COUNT(DISTINCT email) > 2 THEN 'high_risk' WHEN COUNT(DISTINCT voucher_code) > 1 THEN 'review' ELSE 'ok' END as abuse_flag FROM orders WHERE voucher_code IS NOT NULL AND order_date >= CURRENT_DATE - 90 GROUP BY 1, 2 HAVING COUNT(DISTINCT voucher_code) > 1",
+    "when_to_use": ["voucher abuse", "promo fraud", "multi-account detection"],
+    "anti_patterns": [
+      "flagging only by email — abusers use disposable emails; device fingerprint and shipping address are stronger signals"
+    ],
+    "related_patterns": ["vd_redemption_rate", "vd_first_vs_repeat"]
+  },
+  {
+    "id": "vd_first_vs_repeat",
+    "title": "First-time vs repeat use of vouchers",
+    "intent_tags": ["first time voucher", "repeat voucher use", "new customer discount", "voucher frequency"],
+    "sql_features": ["window", "cte"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH voucher_orders AS (SELECT customer_id, order_id, order_date, voucher_code, ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date) as customer_order_rank, ROW_NUMBER() OVER (PARTITION BY customer_id, voucher_code ORDER BY order_date) as voucher_use_rank FROM orders WHERE voucher_code IS NOT NULL) SELECT voucher_code, COUNT(CASE WHEN customer_order_rank = 1 THEN 1 END) as new_customer_uses, COUNT(CASE WHEN customer_order_rank > 1 THEN 1 END) as existing_customer_uses, COUNT(CASE WHEN voucher_use_rank > 1 THEN 1 END) as repeat_same_code_uses FROM voucher_orders GROUP BY 1",
+    "when_to_use": ["new vs existing customer voucher use", "voucher audience split", "first-time use breakdown"],
+    "anti_patterns": [
+      "using account creation date instead of order history to classify new vs existing — a registered user with no prior purchases is a new buyer"
+    ],
+    "related_patterns": ["vd_redemption_rate", "vd_abuse_detection"]
+  },
+  {
+    "id": "vd_stacking",
+    "title": "Discount stacking detection",
+    "intent_tags": ["discount stacking", "multiple discounts", "promo stacking", "combined discounts"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT order_id, customer_id, COUNT(DISTINCT discount_type) as discount_types_applied, SUM(discount_amount) as total_discount, order_total_before_discount, SUM(discount_amount) * 1.0 / NULLIF(order_total_before_discount, 0) as effective_discount_rate FROM order_discounts JOIN orders USING(order_id) GROUP BY order_id, customer_id, order_total_before_discount HAVING COUNT(DISTINCT discount_type) > 1 ORDER BY effective_discount_rate DESC",
+    "when_to_use": ["discount stacking", "combined promo impact", "orders with multiple discounts"],
+    "anti_patterns": [
+      "grouping by discount_type without grouping by order_id — misses the per-order stacking view"
+    ],
+    "related_patterns": ["vd_discount_depth", "vd_abuse_detection"]
+  },
+  {
+    "id": "vd_time_to_redemption",
+    "title": "Time to redemption after voucher issue",
+    "intent_tags": ["time to redemption", "voucher urgency", "redemption speed", "days to use voucher"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT v.campaign_id, COUNT(DISTINCT o.order_id) as redemptions, AVG(DATE_DIFF('day', v.issued_at, o.order_date)) as avg_days_to_redeem, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY DATE_DIFF('day', v.issued_at, o.order_date)) as median_days_to_redeem, COUNT(CASE WHEN DATE_DIFF('day', v.issued_at, o.order_date) <= 3 THEN 1 END) * 1.0 / NULLIF(COUNT(*), 0) as redeemed_within_3d FROM voucher_issuances v JOIN orders o ON v.voucher_code = o.voucher_code GROUP BY 1",
+    "when_to_use": ["voucher urgency", "time to redeem", "expiry optimisation"],
+    "anti_patterns": [
+      "using mean days-to-redemption for skewed distributions — use median; a handful of late redemptions can inflate mean significantly"
+    ],
+    "related_patterns": ["vd_redemption_rate", "vd_revenue_impact"]
+  },
+  {
+    "id": "vd_code_comparison",
+    "title": "A/B comparison of voucher codes / discount amounts",
+    "intent_tags": ["voucher ab test", "discount comparison", "code performance", "10 vs 15 percent off"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT voucher_code, discount_pct, COUNT(DISTINCT customer_id) as users, COUNT(DISTINCT order_id) as orders, SUM(order_total_after_discount) as net_revenue, SUM(discount_amount) as discount_cost, SUM(order_total_after_discount) / NULLIF(COUNT(DISTINCT customer_id), 0) as revenue_per_user, SUM(discount_amount) / NULLIF(COUNT(DISTINCT customer_id), 0) as discount_cost_per_user FROM orders WHERE voucher_code IN (:code_a, :code_b) GROUP BY 1, 2",
+    "when_to_use": ["compare two discount codes", "which discount amount works better", "voucher A/B test"],
+    "anti_patterns": [
+      "comparing codes without controlling for customer segment — a 15% code sent to VIPs vs 10% to new users is not a fair comparison"
+    ],
+    "related_patterns": ["vd_redemption_rate", "vd_incrementality"]
+  }
+]

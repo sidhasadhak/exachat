@@ -1,0 +1,159 @@
+[
+  {
+    "id": "ca_cac",
+    "title": "Customer acquisition cost (CAC) by channel",
+    "intent_tags": ["cac", "customer acquisition cost", "cost to acquire", "acquisition cost by channel"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "intermediate",
+    "pattern_type": "metric",
+    "template": "WITH new_customers AS (SELECT acquisition_channel, DATE_TRUNC('month', first_order_date) as month, COUNT(DISTINCT customer_id) as new_customers FROM customers GROUP BY 1, 2), spend AS (SELECT channel, DATE_TRUNC('month', spend_date) as month, SUM(amount) as marketing_spend FROM marketing_spend GROUP BY 1, 2) SELECT n.acquisition_channel, n.month, n.new_customers, s.marketing_spend, s.marketing_spend / NULLIF(n.new_customers, 0) as cac FROM new_customers n LEFT JOIN spend s ON n.acquisition_channel = s.channel AND n.month = s.month",
+    "when_to_use": ["CAC by channel", "cost per new customer", "acquisition efficiency"],
+    "anti_patterns": [
+      "including returning customers in the denominator — CAC = marketing spend / NEW customers only",
+      "using total company marketing spend divided by total new customers — blends channel costs and gives no actionable insight"
+    ],
+    "related_patterns": ["ca_ltv_cac", "ca_payback_period"]
+  },
+  {
+    "id": "ca_ltv_cac",
+    "title": "LTV:CAC ratio by acquisition channel",
+    "intent_tags": ["ltv cac ratio", "lifetime value to cac", "channel efficiency", "ltv cac", "payback ratio"],
+    "sql_features": ["cte", "join"],
+    "difficulty": "advanced",
+    "pattern_type": "metric",
+    "template": "WITH ltv AS (SELECT acquisition_channel, AVG(SUM(o.revenue)) OVER (PARTITION BY c.acquisition_channel) as avg_ltv FROM customers c JOIN orders o USING(customer_id) GROUP BY c.customer_id, c.acquisition_channel), cac_data AS (SELECT channel, SUM(spend) / NULLIF(COUNT(DISTINCT new_customer_id), 0) as cac FROM channel_acquisition GROUP BY 1) SELECT l.acquisition_channel, l.avg_ltv, c.cac, l.avg_ltv / NULLIF(c.cac, 0) as ltv_cac_ratio FROM ltv l JOIN cac_data c ON l.acquisition_channel = c.channel",
+    "when_to_use": ["LTV:CAC ratio", "which channel has best unit economics", "3:1 LTV CAC benchmark"],
+    "anti_patterns": [
+      "computing LTV on customers of all ages — new cohorts have had less time to spend; normalise by cohort age or use predicted LTV"
+    ],
+    "related_patterns": ["ca_cac", "ca_payback_period"]
+  },
+  {
+    "id": "ca_payback_period",
+    "title": "CAC payback period",
+    "intent_tags": ["payback period", "cac payback", "months to recover cac", "time to payback"],
+    "sql_features": ["cte", "window"],
+    "difficulty": "advanced",
+    "pattern_type": "metric",
+    "template": "WITH cumulative_margin AS (SELECT customer_id, acquisition_channel, cac, DATE_DIFF('month', first_order_date, order_date) as months_since_acq, SUM(gross_margin) OVER (PARTITION BY customer_id ORDER BY order_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as cumulative_margin FROM customer_orders) SELECT acquisition_channel, AVG(months_since_acq) as avg_payback_months FROM (SELECT customer_id, acquisition_channel, MIN(months_since_acq) as months_since_acq FROM cumulative_margin WHERE cumulative_margin >= cac GROUP BY 1, 2) paid_back GROUP BY 1 ORDER BY avg_payback_months",
+    "when_to_use": ["CAC payback", "how long to recover acquisition cost", "months to profitability per customer"],
+    "anti_patterns": [
+      "using revenue instead of gross margin to compute payback — only contribution after variable costs recovers the CAC"
+    ],
+    "related_patterns": ["ca_cac", "ca_ltv_cac"]
+  },
+  {
+    "id": "ca_nps",
+    "title": "NPS score aggregation (Net Promoter Score)",
+    "intent_tags": ["nps", "net promoter score", "promoters detractors", "customer satisfaction", "survey score"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT survey_period, COUNT(*) as respondents, COUNT(CASE WHEN score >= 9 THEN 1 END) as promoters, COUNT(CASE WHEN score BETWEEN 7 AND 8 THEN 1 END) as passives, COUNT(CASE WHEN score <= 6 THEN 1 END) as detractors, (COUNT(CASE WHEN score >= 9 THEN 1 END) - COUNT(CASE WHEN score <= 6 THEN 1 END)) * 100.0 / NULLIF(COUNT(*), 0) as nps FROM nps_responses GROUP BY 1 ORDER BY 1",
+    "when_to_use": ["NPS calculation", "net promoter score by period", "promoter vs detractor split"],
+    "anti_patterns": [
+      "averaging NPS scores instead of computing (promoters - detractors) / total — NPS is not a mean of scores",
+      "including scores of 0 as null — 0 is a valid detractor score"
+    ],
+    "related_patterns": ["ca_health_score", "ca_churn_features"]
+  },
+  {
+    "id": "ca_health_score",
+    "title": "Customer health score (composite signal)",
+    "intent_tags": ["health score", "customer health", "engagement score", "account health", "churn signal"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH signals AS (SELECT customer_id, COUNT(DISTINCT login_date) as logins_30d, SUM(feature_events) as feature_usage_30d, DATEDIFF('day', MAX(last_activity), CURRENT_DATE) as days_since_active, COUNT(CASE WHEN ticket_type='complaint' THEN 1 END) as complaints_90d, MAX(nps_score) as latest_nps FROM customer_activity WHERE activity_date >= CURRENT_DATE - 90 GROUP BY 1) SELECT customer_id, LEAST(100, GREATEST(0, 30 * CASE WHEN logins_30d >= 20 THEN 1 WHEN logins_30d >= 10 THEN 0.7 WHEN logins_30d >= 5 THEN 0.4 ELSE 0.1 END + 25 * CASE WHEN feature_usage_30d >= 100 THEN 1 WHEN feature_usage_30d >= 50 THEN 0.6 ELSE 0.2 END + 25 * CASE WHEN days_since_active <= 7 THEN 1 WHEN days_since_active <= 14 THEN 0.6 ELSE 0.2 END + 20 * CASE WHEN complaints_90d = 0 THEN 1 WHEN complaints_90d = 1 THEN 0.5 ELSE 0 END)) as health_score FROM signals",
+    "when_to_use": ["customer health score", "account risk scoring", "which customers need attention"],
+    "anti_patterns": [
+      "using a single signal (e.g. logins) as a proxy for health — a customer can be logged in daily but extracting zero value",
+      "not documenting weight rationale — health score weights must be validated against actual churn outcomes"
+    ],
+    "related_patterns": ["ca_churn_features", "ca_nps"]
+  },
+  {
+    "id": "ca_segment_migration",
+    "title": "Customer segment migration (upsell / downsell / churn)",
+    "intent_tags": ["segment migration", "tier migration", "upsell downgrade", "customer movement", "segment change"],
+    "sql_features": ["cte", "window"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH segment_history AS (SELECT customer_id, period, segment, LAG(segment) OVER (PARTITION BY customer_id ORDER BY period) as prev_segment FROM customer_segments) SELECT prev_segment, segment as current_segment, COUNT(DISTINCT customer_id) as customers, CASE WHEN prev_segment IS NULL THEN 'new' WHEN segment IS NULL THEN 'churned' WHEN segment > prev_segment THEN 'upgraded' WHEN segment < prev_segment THEN 'downgraded' ELSE 'retained' END as migration_type FROM segment_history WHERE period = :current_period GROUP BY 1, 2 ORDER BY 1, 2",
+    "when_to_use": ["segment migration", "upsell downsell analysis", "cohort state transitions", "tier movement"],
+    "anti_patterns": [
+      "comparing segments without an explicit ordering — define segment hierarchy (1=lowest, N=highest) before computing upgrade/downgrade"
+    ],
+    "related_patterns": ["ca_health_score", "ca_nps"]
+  },
+  {
+    "id": "ca_churn_features",
+    "title": "Churn prediction feature engineering",
+    "intent_tags": ["churn prediction", "churn features", "churn signals", "feature engineering", "churn risk"],
+    "sql_features": ["cte", "window"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH activity AS (SELECT customer_id, COUNT(DISTINCT CASE WHEN activity_date >= CURRENT_DATE - 30 THEN DATE(activity_date) END) as active_days_l30, COUNT(DISTINCT CASE WHEN activity_date BETWEEN CURRENT_DATE - 60 AND CURRENT_DATE - 31 THEN DATE(activity_date) END) as active_days_l60_30, SUM(CASE WHEN activity_date >= CURRENT_DATE - 30 THEN events END) as events_l30, SUM(CASE WHEN activity_date BETWEEN CURRENT_DATE - 60 AND CURRENT_DATE - 31 THEN events END) as events_l60_30 FROM customer_activity GROUP BY 1) SELECT customer_id, active_days_l30, events_l30, events_l30 * 1.0 / NULLIF(events_l60_30, 0) as activity_trend, CASE WHEN active_days_l30 = 0 AND active_days_l60_30 > 5 THEN 'high_risk' WHEN events_l30 * 1.0 / NULLIF(events_l60_30, 0) < 0.5 THEN 'medium_risk' ELSE 'low_risk' END as churn_risk FROM activity",
+    "when_to_use": ["churn risk features", "who is likely to churn", "early warning system"],
+    "anti_patterns": [
+      "computing features from data after the churn event (data leakage) — features must be computed from data available before the prediction date"
+    ],
+    "related_patterns": ["ca_health_score", "ca_segment_migration"]
+  },
+  {
+    "id": "ca_customer_profitability",
+    "title": "Customer profitability ranking",
+    "intent_tags": ["customer profitability", "profit per customer", "customer margin", "most profitable customers"],
+    "sql_features": ["cte", "aggregation", "window"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "SELECT customer_id, SUM(revenue) as gross_revenue, SUM(discount_amount) as discounts, SUM(revenue - discount_amount) as net_revenue, SUM(cogs) as cogs, SUM(revenue - discount_amount - cogs) as gross_profit, SUM(revenue - discount_amount - cogs) / NULLIF(SUM(revenue - discount_amount), 0) as gross_margin_pct, SUM(support_cost) as support_cost, SUM(revenue - discount_amount - cogs - support_cost) as net_profit, NTILE(10) OVER (ORDER BY SUM(revenue - discount_amount - cogs - support_cost) DESC) as profit_decile FROM customer_economics GROUP BY 1 ORDER BY net_profit DESC",
+    "when_to_use": ["most profitable customers", "customer P&L", "profit decile ranking"],
+    "anti_patterns": [
+      "ranking by revenue instead of profit — the highest-revenue customers often receive the largest discounts and highest service costs and may be margin-negative"
+    ],
+    "related_patterns": ["ca_ltv_cac", "ca_health_score"]
+  },
+  {
+    "id": "ca_support_analysis",
+    "title": "Support ticket volume and resolution by segment",
+    "intent_tags": ["support tickets", "ticket volume", "resolution time", "csat", "support analysis", "customer support"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT c.customer_segment, COUNT(t.ticket_id) as tickets, COUNT(DISTINCT t.customer_id) as customers_with_tickets, COUNT(t.ticket_id) * 1.0 / NULLIF(COUNT(DISTINCT t.customer_id), 0) as tickets_per_customer, AVG(DATEDIFF('hour', t.created_at, t.resolved_at)) as avg_resolution_hours, PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY DATEDIFF('hour', t.created_at, t.resolved_at)) as p90_resolution_hours, AVG(t.csat_score) as avg_csat FROM support_tickets t JOIN customers c USING(customer_id) WHERE t.created_at >= CURRENT_DATE - 90 GROUP BY 1 ORDER BY tickets_per_customer DESC",
+    "when_to_use": ["support volume by segment", "which tier creates most tickets", "resolution time SLA"],
+    "anti_patterns": [
+      "measuring total ticket count without normalising by customer count per segment — enterprise segments will always have more tickets by volume"
+    ],
+    "related_patterns": ["ca_health_score", "ca_nps"]
+  },
+  {
+    "id": "ca_upsell_opportunity",
+    "title": "Upsell and cross-sell opportunity identification",
+    "intent_tags": ["upsell", "cross sell", "expansion opportunity", "product gap", "next best product"],
+    "sql_features": ["cte", "join"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH customer_products AS (SELECT customer_id, product_category, MAX(purchase_date) as last_purchased FROM orders JOIN products USING(product_id) GROUP BY 1, 2), top_combos AS (SELECT a.product_category as has_product, b.product_category as often_also_buys, COUNT(DISTINCT a.customer_id) as co_purchasers FROM customer_products a JOIN customer_products b ON a.customer_id = b.customer_id AND a.product_category != b.product_category GROUP BY 1, 2) SELECT cp.customer_id, cp.product_category as owns, tc.often_also_buys as recommend FROM customer_products cp JOIN top_combos tc ON cp.product_category = tc.has_product WHERE NOT EXISTS (SELECT 1 FROM customer_products cp2 WHERE cp2.customer_id = cp.customer_id AND cp2.product_category = tc.often_also_buys) ORDER BY tc.co_purchasers DESC",
+    "when_to_use": ["next best product", "upsell targeting", "cross-sell recommendations", "product gap analysis"],
+    "anti_patterns": [
+      "recommending products the customer already owns — always filter with NOT EXISTS or LEFT JOIN IS NULL"
+    ],
+    "related_patterns": ["ca_customer_profitability", "ca_segment_migration"]
+  },
+  {
+    "id": "ca_nrr",
+    "title": "Net Revenue Retention (NRR) and Gross Revenue Retention (GRR)",
+    "intent_tags": ["nrr", "net revenue retention", "grr", "gross revenue retention", "dollar retention", "expansion revenue"],
+    "sql_features": ["cte", "join"],
+    "difficulty": "advanced",
+    "pattern_type": "metric",
+    "template": "WITH prior AS (SELECT customer_id, SUM(revenue) as prior_mrr FROM monthly_revenue WHERE period = DATE_TRUNC('month', CURRENT_DATE - INTERVAL '12 months') GROUP BY 1), current_p AS (SELECT customer_id, SUM(revenue) as current_mrr FROM monthly_revenue WHERE period = DATE_TRUNC('month', CURRENT_DATE) GROUP BY 1) SELECT SUM(p.prior_mrr) as prior_cohort_mrr, SUM(COALESCE(c.current_mrr, 0)) as retained_expanded_mrr, SUM(LEAST(COALESCE(c.current_mrr, 0), p.prior_mrr)) as retained_capped_mrr, SUM(COALESCE(c.current_mrr, 0)) / NULLIF(SUM(p.prior_mrr), 0) as nrr, SUM(LEAST(COALESCE(c.current_mrr, 0), p.prior_mrr)) / NULLIF(SUM(p.prior_mrr), 0) as grr FROM prior p LEFT JOIN current_p c USING(customer_id)",
+    "when_to_use": ["NRR", "GRR", "net revenue retention", "are existing customers growing or shrinking"],
+    "anti_patterns": [
+      "including new logo revenue in NRR — NRR measures only what happened to the prior period's cohort; new customers are excluded"
+    ],
+    "related_patterns": ["ca_ltv_cac", "ca_segment_migration"]
+  }
+]

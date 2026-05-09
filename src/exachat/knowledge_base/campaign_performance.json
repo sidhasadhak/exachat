@@ -1,0 +1,146 @@
+[
+  {
+    "id": "camp_roas",
+    "title": "Return on ad spend (ROAS)",
+    "intent_tags": ["roas", "return on ad spend", "ad revenue", "campaign roi", "advertising return"],
+    "sql_features": ["aggregation", "join"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT campaign_id, SUM(revenue) as revenue, SUM(spend) as spend, SUM(revenue) / NULLIF(SUM(spend), 0) as roas FROM campaign_performance GROUP BY 1 ORDER BY roas DESC",
+    "when_to_use": ["ROAS by campaign", "ad spend efficiency", "channel ROI comparison"],
+    "anti_patterns": [
+      "using attributed revenue from last-click only — overstates high-funnel campaign ROAS",
+      "dividing total company revenue by campaign spend — only revenue attributable to the campaign belongs in numerator"
+    ],
+    "related_patterns": ["camp_cpa", "camp_attribution"]
+  },
+  {
+    "id": "camp_cpa",
+    "title": "Cost per acquisition (CPA)",
+    "intent_tags": ["cpa", "cost per acquisition", "cost per conversion", "acquisition cost", "cost per order"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT campaign_id, SUM(spend) as spend, COUNT(conversions) as conversions, SUM(spend) / NULLIF(COUNT(conversions), 0) as cpa FROM campaign_performance GROUP BY 1 ORDER BY cpa ASC",
+    "when_to_use": ["CPA by campaign", "cost efficiency", "campaign cost comparison"],
+    "anti_patterns": [
+      "mixing different conversion types (purchases, signups, leads) in the same CPA — define one conversion event per query",
+      "not deduplying conversions when multiple tracking pixels fire for the same event"
+    ],
+    "related_patterns": ["camp_roas", "camp_ctr"]
+  },
+  {
+    "id": "camp_ctr",
+    "title": "Click-through rate (CTR) with impression floor",
+    "intent_tags": ["ctr", "click through rate", "clicks", "impressions", "ad clicks"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT campaign_id, ad_id, SUM(impressions) as impressions, SUM(clicks) as clicks, SUM(clicks) * 1.0 / NULLIF(SUM(impressions), 0) as ctr FROM ad_performance WHERE impressions >= 1000 GROUP BY 1, 2 ORDER BY ctr DESC",
+    "when_to_use": ["CTR by ad", "creative performance", "click efficiency"],
+    "anti_patterns": [
+      "reporting CTR without an impression floor — a 100% CTR on 1 impression is meaningless noise",
+      "comparing CTR across channels with structurally different impression definitions (search vs display)"
+    ],
+    "related_patterns": ["camp_cpa", "camp_roas"]
+  },
+  {
+    "id": "camp_ab_test",
+    "title": "A/B test statistical significance (z-test approximation)",
+    "intent_tags": ["ab test", "a/b test", "experiment", "statistical significance", "control vs treatment", "conversion lift"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH variants AS (SELECT variant, COUNT(*) as users, SUM(converted) as conversions, AVG(converted) as cvr FROM ab_test_results GROUP BY 1), stats AS (SELECT MAX(CASE WHEN variant='control' THEN cvr END) as cvr_control, MAX(CASE WHEN variant='treatment' THEN cvr END) as cvr_treatment, MAX(CASE WHEN variant='control' THEN users END) as n_control, MAX(CASE WHEN variant='treatment' THEN users END) as n_treatment FROM variants) SELECT cvr_control, cvr_treatment, (cvr_treatment - cvr_control) / NULLIF(cvr_control, 0) as relative_lift, (cvr_treatment - cvr_control) / NULLIF(SQRT(cvr_control*(1-cvr_control)/n_control + cvr_treatment*(1-cvr_treatment)/n_treatment), 0) as z_score FROM stats",
+    "when_to_use": ["A/B test significance", "experiment results", "conversion lift significance"],
+    "anti_patterns": [
+      "peeking at results before minimum sample size is reached — inflates false positive rate",
+      "z_score > 1.96 ≈ 95% confidence; z_score > 2.58 ≈ 99% — document which threshold was pre-registered"
+    ],
+    "related_patterns": ["camp_roas", "camp_cpa"]
+  },
+  {
+    "id": "camp_budget_pacing",
+    "title": "Campaign budget pacing",
+    "intent_tags": ["budget pacing", "spend pacing", "daily budget", "underspend overspend", "campaign pacing"],
+    "sql_features": ["cte", "window"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH daily AS (SELECT campaign_id, spend_date, SUM(spend) as daily_spend, budget / DATE_DIFF('day', campaign_end, campaign_start) as ideal_daily FROM campaign_spend JOIN campaigns USING(campaign_id) GROUP BY 1,2,3,4) SELECT campaign_id, spend_date, daily_spend, ideal_daily, SUM(daily_spend) OVER (PARTITION BY campaign_id ORDER BY spend_date) as cumulative_spend, SUM(ideal_daily) OVER (PARTITION BY campaign_id ORDER BY spend_date) as ideal_cumulative, SUM(daily_spend) OVER (PARTITION BY campaign_id ORDER BY spend_date) / NULLIF(SUM(ideal_daily) OVER (PARTITION BY campaign_id ORDER BY spend_date), 0) as pacing_ratio FROM daily",
+    "when_to_use": ["campaign pacing", "underspend detection", "budget burn rate"],
+    "anti_patterns": [
+      "measuring pacing by spend alone without comparing to ideal linear burn — a campaign can be within budget but severely front-loaded"
+    ],
+    "related_patterns": ["camp_roas", "camp_cpa"]
+  },
+  {
+    "id": "camp_email_metrics",
+    "title": "Email campaign open, click, unsubscribe rates",
+    "intent_tags": ["email open rate", "email click rate", "unsubscribe rate", "email campaign", "email performance"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT campaign_id, COUNT(DISTINCT recipient_id) as sent, COUNT(DISTINCT CASE WHEN opened THEN recipient_id END) as opens, COUNT(DISTINCT CASE WHEN clicked THEN recipient_id END) as clicks, COUNT(DISTINCT CASE WHEN unsubscribed THEN recipient_id END) as unsubs, COUNT(DISTINCT CASE WHEN opened THEN recipient_id END) * 1.0 / NULLIF(COUNT(DISTINCT recipient_id), 0) as open_rate, COUNT(DISTINCT CASE WHEN clicked THEN recipient_id END) * 1.0 / NULLIF(COUNT(DISTINCT CASE WHEN opened THEN recipient_id END), 0) as ctor, COUNT(DISTINCT CASE WHEN unsubscribed THEN recipient_id END) * 1.0 / NULLIF(COUNT(DISTINCT recipient_id), 0) as unsub_rate FROM email_events GROUP BY 1",
+    "when_to_use": ["email performance", "open rate", "click-to-open rate", "unsubscribe analysis"],
+    "anti_patterns": [
+      "computing CTOR (click-to-open) as clicks/sent instead of clicks/opens — CTOR measures creative quality independent of subject line"
+    ],
+    "related_patterns": ["camp_ab_test", "camp_ctr"]
+  },
+  {
+    "id": "camp_attribution",
+    "title": "Multi-touch attribution (linear model)",
+    "intent_tags": ["multi touch attribution", "linear attribution", "channel credit", "touchpoints", "campaign attribution"],
+    "sql_features": ["window", "cte"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH touchpoints AS (SELECT user_id, channel, touchpoint_time, conversion_value, COUNT(*) OVER (PARTITION BY user_id) as touch_count FROM user_touchpoints WHERE converted = true) SELECT channel, SUM(conversion_value / touch_count) as attributed_revenue, COUNT(*) as touchpoints FROM touchpoints GROUP BY 1 ORDER BY 2 DESC",
+    "when_to_use": ["multi-touch attribution", "channel credit distribution", "linear attribution model"],
+    "anti_patterns": [
+      "using last-click for brand campaigns and first-click for acquisition — biases the channel mix comparison"
+    ],
+    "related_patterns": ["camp_roas", "camp_cpa"]
+  },
+  {
+    "id": "camp_frequency_reach",
+    "title": "Reach and frequency analysis",
+    "intent_tags": ["reach", "frequency", "ad frequency", "unique reach", "impressions per user"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "metric",
+    "template": "SELECT campaign_id, COUNT(DISTINCT user_id) as reach, SUM(impressions) as total_impressions, SUM(impressions) * 1.0 / NULLIF(COUNT(DISTINCT user_id), 0) as avg_frequency, COUNT(DISTINCT CASE WHEN impression_count > 10 THEN user_id END) as overexposed_users FROM user_impressions GROUP BY 1",
+    "when_to_use": ["ad frequency capping", "reach vs frequency", "overexposure detection"],
+    "anti_patterns": [
+      "reporting total impressions without unique reach — high impressions with low reach means heavy frequency that can cause ad fatigue"
+    ],
+    "related_patterns": ["camp_ctr", "camp_ab_test"]
+  },
+  {
+    "id": "camp_cohort_revenue",
+    "title": "Cohort revenue by acquisition campaign",
+    "intent_tags": ["campaign cohort", "campaign ltv", "acquisition cohort", "campaign revenue over time"],
+    "sql_features": ["cte", "window"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH acq AS (SELECT user_id, campaign_id, acquisition_date FROM user_acquisition), rev AS (SELECT o.user_id, a.campaign_id, DATE_DIFF('month', a.acquisition_date, o.order_date) as months_after_acq, o.revenue FROM orders o JOIN acq a USING(user_id)) SELECT campaign_id, SUM(CASE WHEN months_after_acq = 0 THEN revenue END) / COUNT(DISTINCT user_id) as m0_ltv, SUM(CASE WHEN months_after_acq <= 3 THEN revenue END) / COUNT(DISTINCT user_id) as m3_ltv, SUM(CASE WHEN months_after_acq <= 12 THEN revenue END) / COUNT(DISTINCT user_id) as m12_ltv FROM rev GROUP BY 1",
+    "when_to_use": ["campaign LTV", "post-acquisition revenue by campaign", "payback period by channel"],
+    "anti_patterns": [
+      "comparing LTV across campaigns of different ages — newer campaigns have less time to generate revenue"
+    ],
+    "related_patterns": ["camp_roas", "camp_cpa"]
+  },
+  {
+    "id": "camp_daypart",
+    "title": "Campaign performance by daypart / day of week",
+    "intent_tags": ["daypart", "day of week", "hour of day", "campaign timing", "ad scheduling"],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "analytical",
+    "template": "SELECT EXTRACT(DOW FROM event_time) as day_of_week, EXTRACT(HOUR FROM event_time) as hour, SUM(spend) as spend, SUM(conversions) as conversions, SUM(spend) / NULLIF(SUM(conversions), 0) as cpa FROM campaign_events GROUP BY 1, 2 ORDER BY cpa ASC",
+    "when_to_use": ["ad scheduling", "best time to advertise", "daypart bidding"],
+    "anti_patterns": [
+      "optimising daypart based on conversion count alone without normalising by spend — busy hours look better simply because more budget runs then"
+    ],
+    "related_patterns": ["camp_cpa", "camp_roas"]
+  }
+]

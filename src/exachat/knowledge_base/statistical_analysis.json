@@ -1,0 +1,160 @@
+[
+  {
+    "id": "stat_percentile",
+    "title": "Percentile and quantile distribution",
+    "intent_tags": ["percentile", "quantile", "p50", "p90", "p95", "p99", "median", "distribution"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY value) as p25, PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY value) as median, PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY value) as p75, PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY value) as p90, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY value) as p95, PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY value) as p99, MAX(value) as max_value FROM metrics",
+    "when_to_use": ["response time percentiles", "revenue distribution", "SLA thresholds", "any skewed metric"],
+    "anti_patterns": [
+      "reporting only the mean for skewed distributions (revenue, latency, LTV) — mean is pulled by outliers; median and p95/p99 are more actionable",
+      "PERCENTILE_DISC returns an actual row value; PERCENTILE_CONT interpolates — use CONT for continuous metrics"
+    ],
+    "related_patterns": ["stat_zscore", "stat_histogram"]
+  },
+  {
+    "id": "stat_zscore",
+    "title": "Z-score outlier detection",
+    "intent_tags": ["z-score", "outlier detection", "anomaly detection", "standard deviations", "outliers"],
+    "sql_features": ["window", "cte"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH stats AS (SELECT AVG(metric_value) as mean_val, STDDEV(metric_value) as stddev_val FROM metrics) SELECT m.*, (m.metric_value - s.mean_val) / NULLIF(s.stddev_val, 0) as z_score, CASE WHEN ABS((m.metric_value - s.mean_val) / NULLIF(s.stddev_val, 0)) > 3 THEN 'outlier' WHEN ABS((m.metric_value - s.mean_val) / NULLIF(s.stddev_val, 0)) > 2 THEN 'suspect' ELSE 'normal' END as outlier_flag FROM metrics m CROSS JOIN stats s",
+    "when_to_use": ["outlier detection", "anomaly flagging", "data quality checks", "unusual values"],
+    "anti_patterns": [
+      "applying z-score to non-normal distributions — z-score assumes normality; use IQR method (Q3 + 1.5*IQR) for skewed data like revenue or LTV",
+      "|z| > 3 is the standard threshold for outliers; adjust to > 2 for stricter detection"
+    ],
+    "related_patterns": ["stat_iqr_outlier", "stat_percentile"]
+  },
+  {
+    "id": "stat_iqr_outlier",
+    "title": "IQR-based outlier detection (robust, non-parametric)",
+    "intent_tags": ["iqr", "interquartile range", "robust outlier", "box plot outlier", "non-parametric outlier"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "WITH bounds AS (SELECT PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY value) as q1, PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY value) as q3 FROM metrics), iqr AS (SELECT q1, q3, q3 - q1 as iqr, q1 - 1.5*(q3-q1) as lower_fence, q3 + 1.5*(q3-q1) as upper_fence FROM bounds) SELECT m.*, i.lower_fence, i.upper_fence, CASE WHEN m.value < i.lower_fence OR m.value > i.upper_fence THEN 'outlier' ELSE 'normal' END as outlier_flag FROM metrics m CROSS JOIN iqr i",
+    "when_to_use": ["outlier detection on skewed data", "revenue outliers", "non-normal distributions"],
+    "anti_patterns": [
+      "using 1.5*IQR for extreme outlier detection — use 3.0*IQR for extreme outliers only"
+    ],
+    "related_patterns": ["stat_zscore", "stat_percentile"]
+  },
+  {
+    "id": "stat_correlation",
+    "title": "Pearson correlation between two metrics",
+    "intent_tags": ["correlation", "pearson correlation", "relationship between metrics", "corr", "metric correlation"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT CORR(metric_a, metric_b) as pearson_r, REGR_SLOPE(metric_b, metric_a) as slope, REGR_INTERCEPT(metric_b, metric_a) as intercept, REGR_R2(metric_b, metric_a) as r_squared, COUNT(*) as n FROM metrics_table",
+    "when_to_use": ["correlation between two metrics", "does X drive Y", "relationship strength"],
+    "anti_patterns": [
+      "correlation = causation — always state this is associative",
+      "running CORR on time series without detrending — two upward trends will show near-perfect correlation even if unrelated (spurious correlation)"
+    ],
+    "related_patterns": ["stat_linear_regression", "stat_zscore"]
+  },
+  {
+    "id": "stat_linear_regression",
+    "title": "Simple linear regression (slope and intercept in SQL)",
+    "intent_tags": ["linear regression", "regression", "slope", "intercept", "trend line", "regr_slope"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT REGR_SLOPE(y_value, x_value) as slope, REGR_INTERCEPT(y_value, x_value) as intercept, REGR_R2(y_value, x_value) as r_squared, COUNT(*) as n, AVG(x_value) as avg_x, AVG(y_value) as avg_y FROM regression_data",
+    "when_to_use": ["trend line", "predict Y from X", "revenue vs spend relationship", "R² for model fit"],
+    "anti_patterns": [
+      "interpreting R² alone without checking residuals — a high R² can still mask a poor fit on non-linear data"
+    ],
+    "related_patterns": ["stat_correlation", "stat_moving_average"]
+  },
+  {
+    "id": "stat_moving_average",
+    "title": "Moving average (simple and exponential proxy)",
+    "intent_tags": ["moving average", "rolling average", "sma", "7 day average", "trend smoothing", "rolling mean"],
+    "sql_features": ["window"],
+    "difficulty": "beginner",
+    "pattern_type": "analytical",
+    "template": "SELECT date, value, AVG(value) OVER (ORDER BY date ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) as sma_7d, AVG(value) OVER (ORDER BY date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as sma_30d, AVG(value) OVER (ORDER BY date ROWS BETWEEN 89 PRECEDING AND CURRENT ROW) as sma_90d FROM daily_metrics ORDER BY date",
+    "when_to_use": ["smoothed trend", "noise reduction", "7-day moving average", "weekly trend"],
+    "anti_patterns": [
+      "using RANGE BETWEEN instead of ROWS BETWEEN on dates — RANGE groups equal values, which can include wrong rows when dates repeat",
+      "reporting moving average without flagging that early rows have fewer data points (warm-up period)"
+    ],
+    "related_patterns": ["stat_linear_regression", "stat_stddev"]
+  },
+  {
+    "id": "stat_stddev",
+    "title": "Standard deviation and variance for metric volatility",
+    "intent_tags": ["standard deviation", "variance", "volatility", "stddev", "metric stability"],
+    "sql_features": ["aggregation", "window"],
+    "difficulty": "beginner",
+    "pattern_type": "metric",
+    "template": "SELECT segment, AVG(daily_value) as mean, STDDEV(daily_value) as stddev, VARIANCE(daily_value) as variance, STDDEV(daily_value) / NULLIF(AVG(daily_value), 0) as coefficient_of_variation, MIN(daily_value) as min_val, MAX(daily_value) as max_val FROM daily_metrics GROUP BY 1 ORDER BY coefficient_of_variation DESC",
+    "when_to_use": ["metric volatility", "which segment is most stable", "coefficient of variation", "revenue predictability"],
+    "anti_patterns": [
+      "using STDDEV (sample) vs STDDEV_POP (population) interchangeably — use STDDEV for samples, STDDEV_POP only when you have the full population"
+    ],
+    "related_patterns": ["stat_zscore", "stat_moving_average"]
+  },
+  {
+    "id": "stat_histogram",
+    "title": "Histogram bucketing with WIDTH_BUCKET",
+    "intent_tags": ["histogram", "distribution", "buckets", "bins", "value distribution", "frequency distribution"],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "template": "SELECT WIDTH_BUCKET(value, 0, 1000, 20) as bucket, MIN(value) as bucket_min, MAX(value) as bucket_max, COUNT(*) as frequency, COUNT(*) * 1.0 / SUM(COUNT(*)) OVER () as pct FROM metrics GROUP BY 1 ORDER BY 1",
+    "when_to_use": ["value distribution", "histogram", "how values are spread", "order size distribution"],
+    "anti_patterns": [
+      "using equal-width bins (WIDTH_BUCKET) for highly skewed data — equal-frequency bins (NTILE) give more meaningful segments for long-tail distributions"
+    ],
+    "related_patterns": ["stat_percentile", "stat_zscore"]
+  },
+  {
+    "id": "stat_ab_significance",
+    "title": "A/B test conversion significance (two-proportion z-test)",
+    "intent_tags": ["ab test", "statistical significance", "p-value", "conversion test", "experiment significance", "z-test"],
+    "sql_features": ["cte", "aggregation"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "WITH variants AS (SELECT variant, SUM(users) as n, SUM(conversions) as x, SUM(conversions) * 1.0 / NULLIF(SUM(users), 0) as p FROM ab_results GROUP BY 1), calc AS (SELECT MAX(CASE WHEN variant='control' THEN p END) as p_c, MAX(CASE WHEN variant='treatment' THEN p END) as p_t, MAX(CASE WHEN variant='control' THEN n END) as n_c, MAX(CASE WHEN variant='treatment' THEN n END) as n_t FROM variants) SELECT p_c, p_t, (p_t - p_c) / NULLIF(p_c, 0) as relative_lift, (p_t - p_c) / NULLIF(SQRT(((p_c*n_c + p_t*n_t)/(n_c+n_t)) * (1 - (p_c*n_c + p_t*n_t)/(n_c+n_t)) * (1.0/n_c + 1.0/n_t)), 0) as z_score, CASE WHEN ABS((p_t - p_c) / NULLIF(SQRT(((p_c*n_c + p_t*n_t)/(n_c+n_t)) * (1 - (p_c*n_c + p_t*n_t)/(n_c+n_t)) * (1.0/n_c + 1.0/n_t)), 0)) > 2.576 THEN '99%' WHEN ABS((p_t - p_c) / NULLIF(SQRT(((p_c*n_c + p_t*n_t)/(n_c+n_t)) * (1 - (p_c*n_c + p_t*n_t)/(n_c+n_t)) * (1.0/n_c + 1.0/n_t)), 0)) > 1.96 THEN '95%' ELSE 'not significant' END as significance FROM calc",
+    "when_to_use": ["A/B test result", "is the conversion difference significant", "experiment significance level"],
+    "anti_patterns": [
+      "stopping the test as soon as p < 0.05 is reached (peeking) — inflate Type I error rate significantly; define sample size upfront using a power calculator"
+    ],
+    "related_patterns": ["stat_zscore", "stat_correlation"]
+  },
+  {
+    "id": "stat_median_approx",
+    "title": "Median and mode calculation",
+    "intent_tags": ["median", "mode", "middle value", "most common value", "central tendency"],
+    "sql_features": ["aggregation", "window"],
+    "difficulty": "beginner",
+    "pattern_type": "analytical",
+    "template": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value) as median, (SELECT value FROM metrics GROUP BY value ORDER BY COUNT(*) DESC LIMIT 1) as mode, AVG(value) as mean FROM metrics",
+    "when_to_use": ["median order value", "most common product", "central tendency of skewed data"],
+    "anti_patterns": [
+      "using AVG for salary, revenue, or LTV reporting — mean is always distorted by top percentile; median is the right summary statistic"
+    ],
+    "related_patterns": ["stat_percentile", "stat_histogram"]
+  },
+  {
+    "id": "stat_running_zscore",
+    "title": "Rolling z-score for time-series anomaly detection",
+    "intent_tags": ["rolling z-score", "time series anomaly", "anomaly detection", "rolling outlier", "metric spike"],
+    "sql_features": ["window"],
+    "difficulty": "advanced",
+    "pattern_type": "analytical",
+    "template": "SELECT date, value, AVG(value) OVER (ORDER BY date ROWS BETWEEN 29 PRECEDING AND 1 PRECEDING) as rolling_mean, STDDEV(value) OVER (ORDER BY date ROWS BETWEEN 29 PRECEDING AND 1 PRECEDING) as rolling_stddev, (value - AVG(value) OVER (ORDER BY date ROWS BETWEEN 29 PRECEDING AND 1 PRECEDING)) / NULLIF(STDDEV(value) OVER (ORDER BY date ROWS BETWEEN 29 PRECEDING AND 1 PRECEDING), 0) as rolling_zscore FROM daily_metrics",
+    "when_to_use": ["spike detection", "metric anomaly", "traffic or revenue anomaly", "alert threshold"],
+    "anti_patterns": [
+      "including the current row in the rolling mean — current point must not influence its own z-score; use ROWS BETWEEN N PRECEDING AND 1 PRECEDING"
+    ],
+    "related_patterns": ["stat_zscore", "stat_moving_average"]
+  }
+]
