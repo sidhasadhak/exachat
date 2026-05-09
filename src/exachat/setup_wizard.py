@@ -73,7 +73,7 @@ def _ensure_mlx_lm() -> bool:
         return True
     print(f"\n  {_y('!')}  mlx_lm not installed — installing {_c('mlx-lm')} now…\n")
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "mlx-lm"],
+        [sys.executable, "-m", "pip", "install", "mlx-lm", "transformers>=4.47"],
         check=False,
     )
     if result.returncode == 0:
@@ -81,6 +81,23 @@ def _ensure_mlx_lm() -> bool:
         return True
     print(f"\n  {_y('⚠')}  Install failed — run manually:  {sys.executable} -m pip install mlx-lm\n")
     return False
+
+
+def _mlx_model_cached(model: str) -> bool:
+    """Return True if the model weights already exist in the HuggingFace cache."""
+    try:
+        from huggingface_hub import scan_cache_dir
+        info = scan_cache_dir()
+        repo_id_slug = model.replace("/", "--")
+        for repo in info.repos:
+            if repo_id_slug in repo.repo_id.replace("/", "--"):
+                return True
+        return False
+    except Exception:
+        # Fall back to checking the default cache path directly
+        cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+        slug = "models--" + model.replace("/", "--")
+        return (cache_dir / slug).exists()
 
 
 def _download_mlx(model: str) -> bool:
