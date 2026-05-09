@@ -126,15 +126,17 @@ def main() -> None:
             else:
                 print(f"  {_GREEN}✓{_RST}  mlx_lm installed.\n")
 
-        # Pre-flight 2: check model weights are on disk before spawning
+        # Pre-flight 2: ensure model weights are on disk — download if missing
         if _mlx_ok:
-            from exachat.setup_wizard import _mlx_model_cached
+            from exachat.setup_wizard import _mlx_model_cached, _download_mlx
             if not _mlx_model_cached(model):
-                _mlx_warn(
-                    f"Model '{model}' is not downloaded yet.",
-                    f"Download it first:  huggingface-cli download {model}",
-                )
-                _mlx_ok = False
+                print(f"\n  {_YELL}!{_RST}  Model {_CYAN}{model}{_RST} not found in cache — downloading now…")
+                if not _download_mlx(model):
+                    _mlx_warn(
+                        f"Model '{model}' could not be downloaded.",
+                        f"Download manually:  huggingface-cli download {model}",
+                    )
+                    _mlx_ok = False
 
         if _mlx_ok:
             if _mlx_already_running(mlx_url):

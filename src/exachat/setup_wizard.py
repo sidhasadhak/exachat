@@ -101,7 +101,14 @@ def _mlx_model_cached(model: str) -> bool:
 
 
 def _download_mlx(model: str) -> bool:
-    """Cache MLX model weights from HuggingFace (requires huggingface_hub)."""
+    """Cache MLX model weights from HuggingFace (requires huggingface_hub).
+
+    Skips silently if already cached.  Returns True on success or already-cached.
+    """
+    if _mlx_model_cached(model):
+        print(f"\n  {_g('✓')} Model already cached — skipping download.\n")
+        return True
+
     print(f"\n  Downloading {_c(model)}")
     print(_dim("  (~5 GB — grab a coffee, this only happens once)\n"))
     try:
@@ -114,12 +121,21 @@ def _download_mlx(model: str) -> bool:
         print(f"\n  {_g('✓')} Model cached to ~/.cache/huggingface/hub/\n")
         return True
     except ImportError:
-        print(f"  {_y('⚠')}  huggingface_hub not available — "
-              "model will download automatically on first server start.\n")
+        # huggingface_hub ships with mlx_lm — if missing, install likely failed too.
+        # mlx_lm server does NOT auto-download; it will crash without the model.
+        print(
+            f"\n  {_y('⚠')}  huggingface_hub not found.\n"
+            f"  Download the model manually before starting exachat:\n"
+            f"      {_c('pip install huggingface_hub')}\n"
+            f"      {_c(f'huggingface-cli download {model}')}\n"
+        )
         return False
     except Exception as exc:
-        print(f"  {_y('⚠')}  Download error: {exc}\n"
-              "  The model will download automatically when you first start the server.\n")
+        print(
+            f"\n  {_y('⚠')}  Download failed: {exc}\n"
+            f"  Download manually before starting exachat:\n"
+            f"      {_c(f'huggingface-cli download {model}')}\n"
+        )
         return False
 
 
