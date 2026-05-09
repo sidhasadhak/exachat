@@ -1,0 +1,104 @@
+[
+  {
+    "id": "duckdb_varchar_date_cast",
+    "title": "DuckDB: cast VARCHAR date columns before using date functions",
+    "intent_tags": [
+      "duckdb date_trunc varchar", "no function matches date_trunc string_literal varchar",
+      "date_trunc on varchar", "date_trunc varchar error", "date column is varchar",
+      "cast date column duckdb", "order date varchar duckdb", "date_trunc cast",
+      "date function on text column", "date_diff varchar error", "extract from varchar",
+      "monthly trend duckdb", "year month from varchar date", "date_trunc error duckdb",
+      "binder error date_trunc", "varchar to date duckdb", "duckdb date cast required"
+    ],
+    "sql_features": ["aggregation"],
+    "difficulty": "beginner",
+    "pattern_type": "correctness",
+    "dialect_notes": {
+      "duckdb": "date_trunc(), date_diff(), EXTRACT(), strftime() ALL require a DATE or TIMESTAMP argument — not VARCHAR. Always cast VARCHAR date columns first."
+    },
+    "template": "SELECT\n    DATE_TRUNC('month', CAST(\"Order Date\" AS DATE)) AS month,\n    SUM(sales) AS total_sales,\n    SUM(profit) AS total_profit\nFROM main.superstore\nGROUP BY 1\nORDER BY 1",
+    "when_to_use": [
+      "DuckDB query involving date_trunc, date_diff, date_part, EXTRACT, strftime on a column whose schema type is VARCHAR, TEXT, or CHARACTER VARYING",
+      "monthly/yearly/quarterly aggregation on a date column loaded from CSV that is stored as VARCHAR in DuckDB",
+      "any date arithmetic on a DuckDB VARCHAR column (date comparison, interval addition, etc.)"
+    ],
+    "anti_patterns": [
+      "DATE_TRUNC('month', \"Order Date\") when \"Order Date\" is VARCHAR — raises 'No function matches date_trunc(STRING_LITERAL, VARCHAR)'; always cast: DATE_TRUNC('month', CAST(\"Order Date\" AS DATE))",
+      "date_diff('day', \"Start Date\", \"End Date\") when both are VARCHAR — cast each side: date_diff('day', \"Start Date\"::DATE, \"End Date\"::DATE)",
+      "EXTRACT(year FROM \"Order Date\") when \"Order Date\" is VARCHAR — cast first: EXTRACT(year FROM \"Order Date\"::DATE)",
+      "strftime(\"Order Date\", '%Y-%m') on a VARCHAR column — cast: strftime(\"Order Date\"::TIMESTAMP, '%Y-%m')",
+      "using TRY_CAST without checking the date format — if values are not parseable as DATE, TRY_CAST returns NULL silently, producing empty results"
+    ],
+    "notes": [
+      "Two equivalent cast syntaxes in DuckDB: CAST(col AS DATE) or col::DATE. Both work identically.",
+      "For CSV-loaded data with mixed/unknown date formats use strptime(col, 'format_string') to parse before truncating.",
+      "Common CSV date formats: '%m/%d/%Y' (US), '%d/%m/%Y' (EU), '%Y-%m-%d' (ISO). Check sample values to confirm.",
+      "If the column contains datetime strings (e.g. '2023-01-15 08:30:00'), cast to TIMESTAMP, not DATE: CAST(col AS TIMESTAMP).",
+      "date_trunc on a TIMESTAMP returns a TIMESTAMP; on a DATE returns a TIMESTAMP. Both group correctly by month."
+    ],
+    "related_patterns": ["duckdb_strptime_parse", "stat_moving_average", "adv_dual_rolling_windows"]
+  },
+  {
+    "id": "duckdb_strptime_parse",
+    "title": "DuckDB: parse VARCHAR dates with strptime when format is non-ISO",
+    "intent_tags": [
+      "strptime duckdb", "parse date string duckdb", "mm/dd/yyyy duckdb",
+      "dd/mm/yyyy duckdb", "date format duckdb", "parse varchar to date duckdb",
+      "date format mismatch", "invalid date format duckdb", "non-iso date duckdb"
+    ],
+    "sql_features": ["aggregation"],
+    "difficulty": "intermediate",
+    "pattern_type": "correctness",
+    "dialect_notes": {
+      "duckdb": "Use strptime(col, format) for non-ISO date strings. ISO dates (YYYY-MM-DD) can be cast directly with ::DATE."
+    },
+    "template": "SELECT\n    DATE_TRUNC('month', strptime(\"Order Date\", '%m/%d/%Y')) AS month,\n    SUM(sales) AS total_sales\nFROM main.superstore\nGROUP BY 1\nORDER BY 1\n\n-- Alternative: TRY_STRPTIME for fault tolerance (returns NULL on unparseable values)\nSELECT\n    DATE_TRUNC('month', TRY_STRPTIME(\"Order Date\", '%m/%d/%Y')) AS month,\n    SUM(sales) AS total_sales\nFROM main.superstore\nWHERE TRY_STRPTIME(\"Order Date\", '%m/%d/%Y') IS NOT NULL\nGROUP BY 1\nORDER BY 1",
+    "when_to_use": [
+      "DuckDB date column stored as VARCHAR in US format MM/DD/YYYY (Superstore, most US Excel exports)",
+      "any non-ISO date string that cannot be directly CAST to DATE (CAST fails or produces wrong results)",
+      "use TRY_STRPTIME instead of strptime to skip unparseable rows rather than raising an error"
+    ],
+    "anti_patterns": [
+      "CAST(\"Order Date\" AS DATE) on a MM/DD/YYYY string like '01/15/2023' — DuckDB interprets CAST as ISO (YYYY-MM-DD) and will either error or parse incorrectly; use strptime(\"Order Date\", '%m/%d/%Y') instead",
+      "strptime without checking the actual format in sample data — Superstore uses '%m/%d/%Y'; other datasets may use '%d-%m-%Y' or '%Y/%m/%d'"
+    ],
+    "notes": [
+      "strptime format codes: %Y=4-digit year, %m=2-digit month, %d=2-digit day, %H=hour, %M=minute, %S=second.",
+      "Superstore 'Order Date' and 'Ship Date' columns are typically MM/DD/YYYY strings in CSV form.",
+      "strptime returns a TIMESTAMP. Use ::DATE to downcast to DATE if you don't need time of day."
+    ],
+    "related_patterns": ["duckdb_varchar_date_cast"]
+  },
+  {
+    "id": "duckdb_qualify_dedup",
+    "title": "DuckDB: QUALIFY for row deduplication without a subquery",
+    "intent_tags": [
+      "qualify duckdb", "deduplicate rows duckdb", "latest row per group",
+      "first row per partition duckdb", "row_number qualify", "top N per group duckdb",
+      "most recent record duckdb", "qualify row_number", "qualify rank duckdb",
+      "dedup duckdb", "distinct on duckdb"
+    ],
+    "sql_features": ["window"],
+    "difficulty": "intermediate",
+    "pattern_type": "analytical",
+    "dialect_notes": {
+      "duckdb": "QUALIFY filters window function results inline — no subquery needed. Only for window functions (ROW_NUMBER, RANK, etc.); use HAVING for aggregate filters."
+    },
+    "template": "SELECT *\nFROM orders\nQUALIFY ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY order_date DESC) = 1",
+    "when_to_use": [
+      "DuckDB: get the latest/first row per group without wrapping in a subquery",
+      "deduplicate a table keeping only the most recent record per entity",
+      "top-N rows per partition in DuckDB"
+    ],
+    "anti_patterns": [
+      "using QUALIFY with GROUP BY ALL — DuckDB does not support QUALIFY + GROUP BY ALL together; use explicit GROUP BY columns",
+      "using QUALIFY to filter aggregate results (SUM, AVG, COUNT) — QUALIFY is only for window function results; use HAVING for aggregate filters",
+      "QUALIFY is DuckDB/Snowflake/Teradata specific — in PostgreSQL or MySQL use a subquery with WHERE rn = 1 instead"
+    ],
+    "notes": [
+      "QUALIFY is equivalent to: SELECT * FROM (SELECT *, ROW_NUMBER() OVER (...) AS rn FROM t) WHERE rn = 1 — but cleaner.",
+      "Only available in DuckDB, Snowflake, Teradata, and BigQuery. Not standard SQL."
+    ],
+    "related_patterns": ["wf_row_number", "duckdb_varchar_date_cast"]
+  }
+]

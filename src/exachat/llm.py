@@ -62,6 +62,18 @@ DuckDB SQL dialect — apply these rules when the dialect is duckdb:
     EXTRACT(year FROM col), strftime(col, '%Y-%m-%d'), strptime(str, '%Y-%m-%d'),
     today(), now(), current_date, col + INTERVAL '1 day'
     Parts: year, month, day, quarter, week, weekday, hour, minute, second, epoch
+- CRITICAL — VARCHAR date columns: date_trunc(), date_diff(), EXTRACT() and all date functions
+    require a DATE or TIMESTAMP argument. If the schema shows a date column typed as
+    VARCHAR / TEXT / CHARACTER VARYING, you MUST cast it first:
+        date_trunc('month', CAST("Order Date" AS DATE))
+        date_trunc('month', "Order Date"::DATE)
+        date_diff('day', "Start Date"::DATE, "End Date"::DATE)
+    Calling date_trunc('month', varchar_column) raises:
+      "No function matches date_trunc(STRING_LITERAL, VARCHAR)"
+    Any column whose name contains 'date', 'time', 'at', 'created', 'updated', 'day',
+    'month', 'year' and whose schema type is VARCHAR must be cast to DATE or TIMESTAMP
+    before use in any date function. When the schema marks a column with ⚠ Cast required,
+    always wrap it with CAST(col AS DATE) or CAST(col AS TIMESTAMP).
 - Identifiers are case-insensitive but preserve their stored case.
   ALWAYS use the exact column names from the schema — if schema shows "Order Date", write "Order Date";
   if it shows order_date, write order_date. Never guess or transform column names.

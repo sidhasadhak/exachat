@@ -247,6 +247,36 @@ class SchemaContext:
                     lines.append(f"    {col}: [{display}]")
             lines.append("")
 
+        # DuckDB-specific: warn about VARCHAR columns that look like dates.
+        # date_trunc / date_diff fail with "No function matches ... VARCHAR"
+        # unless the column is explicitly cast to DATE/TIMESTAMP first.
+        if "duckdb" in self.dialect.lower():
+            _DATE_NAME_TOKENS = {
+                "date", "time", "day", "month", "year",
+                "created", "updated", "modified", "at",
+                "timestamp", "dt", "period", "week",
+            }
+            _VARCHAR_TYPES = {"varchar", "text", "character varying", "string", "char"}
+            cast_warnings: list[str] = []
+            for t in self.tables:
+                for c in t.columns:
+                    col_type_lc = c.type.lower().split("(")[0].strip()
+                    if col_type_lc not in _VARCHAR_TYPES:
+                        continue
+                    # Check if any date-like token appears in the column name
+                    col_tokens = set(re.split(r"[\s_]", c.original_name.lower()))
+                    col_tokens.update(re.split(r"[\s_]", c.name.lower()))
+                    if col_tokens & _DATE_NAME_TOKENS:
+                        display = c.original_name if c.original_name != c.name else c.name
+                        cast_warnings.append(
+                            f"  {t.name}.{display!r} is VARCHAR — wrap in CAST(\"{display}\" AS DATE) "
+                            "or \"" + display + "\"::DATE before using date_trunc / date_diff / EXTRACT"
+                        )
+            if cast_warnings:
+                lines.append("⚠ DUCKDB CAST REQUIRED — these date-like columns are VARCHAR and MUST be cast:")
+                lines.extend(cast_warnings)
+                lines.append("")
+
         # Auto-detected join candidates help the LLM pick correct ON clauses
         join_hints = _infer_join_hints(self.tables)
         if join_hints:
