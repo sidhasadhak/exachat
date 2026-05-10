@@ -446,7 +446,7 @@ class MLXBackend(OpenAICompatibleBackend):
         pip install exachat[mlx]
 
     Start server before connecting exachat:
-        python3 -m mlx_lm.server \\
+        python3 -m mlx_lm server \\
             --model mlx-community/Qwen3-8B-4bit \\
             --port 8080
 
@@ -481,7 +481,7 @@ class MLXBackend(OpenAICompatibleBackend):
                 False,
                 f"MLX server not running at {self.base_url}.\n"
                 f"Start it with:\n"
-                f"  python3 -m mlx_lm.server --model {self.model} --port 8080",
+                f"  python3 -m mlx_lm server --model {self.model} --port 8080",
             )
         except Exception as e:
             return False, str(e)
@@ -515,6 +515,6 @@ class MLXBackend(OpenAICompatibleBackend):
             raise ConnectionError(
                 f"MLX server not reachable at {self.base_url}.\n"
                 f"Open a terminal and run:\n"
-                f"  python3 -m mlx_lm.server --model {self.model} --port 8080\n"
+                f"  python3 -m mlx_lm server --model {self.model} --port 8080\n"
                 f"Then try again."
             )

@@ -1228,7 +1228,7 @@ with st.sidebar:
                 st.caption(
                     "Install once: `pip install exachat[mlx]`  \n"
                     "Then start the server:  \n"
-                    f"`python3 -m mlx_lm.server --model {st.session_state.get('_sb_mlx_model', 'mlx-community/Qwen3-8B-4bit')} --port 8080`"
+                    f"`python3 -m mlx_lm server --model {st.session_state.get('_sb_mlx_model', 'mlx-community/Qwen3-8B-4bit')} --port 8080`"
                 )
             else:
                 st.caption(
