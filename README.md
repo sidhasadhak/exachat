@@ -16,12 +16,15 @@ Local LLMs only. No data leaves your machine. Works with DuckDB, Exasol, Postgre
 - **Visual Query Builder** — table / dimension / measure selector with filters, sort, and limit — no SQL required
 - **Schema Relationship Map** — auto-generated Mermaid ER diagram with detected join paths
 - **Metrics Catalog** — define, save, and reuse KPI queries with one click
+- **Auto-correct retry loop** — failed queries are automatically diagnosed and fixed by the LLM, up to 3 attempts; the UI shows live attempt progress and a summary of what was corrected
+- **Enriched Knowledge Base** — 203 domain SQL patterns across eCommerce, Finance, Marketing, Product, and BI; each pattern includes inflation/deflation causes, causal relationships, graduated SQL assets, and anti-patterns
 - **Semantic embeddings** — optional in-process embeddings (`pip install exachat[embeddings]`) improve SQL pattern retrieval and schema table matching; understands business vocabulary ("burn rate" → expense tables, "churn" → cancellation tables)
 - **Smart schema retrieval** — for databases with 15+ tables, only the relevant subset is sent to the LLM instead of the full schema; join-connected tables are always included
-- **Knowledge Base** — ChromaDB-backed store for Q→SQL patterns; injects similar patterns as few-shot examples into the prompt
+- **Knowledge Base** — ChromaDB-backed store for SQL patterns; injects similar patterns as few-shot examples into the prompt
 - **Join inference** — detects join paths by exact and fuzzy column-name matching; explicitly warns the LLM about table pairs that cannot be joined
 - **Access Control** — restrict queries to specific schemas and/or tables; SQL safety validator (allowlist SELECT/WITH only)
-- **DuckDB dialect hints** — built-in prompt guidance for `QUALIFY`, `GROUP BY ALL`, `TRY_CAST`, date functions, and more
+- **Dialect hints** — built-in prompt guidance for DuckDB (`QUALIFY`, `GROUP BY ALL`, `TRY_CAST`, date functions), PostgreSQL (timestamp cast safety, interval arithmetic), and Exasol
+- **MLX auto-start** — on Apple Silicon, the MLX server starts automatically on first query; model is downloaded once if not already cached
 - **Pre-fill with `.env`** — set default paths, model, and URL so the UI is ready on launch
 
 ---
@@ -44,7 +47,7 @@ pip install exachat[all]             # everything
 |-------|---------|--------------|
 | `embeddings` | `fastembed` | In-process semantic embeddings via ONNX. Model (~130 MB) downloaded once on first use. No server needed. |
 | `exasol` | `pyexasol`, `sqlalchemy-exasol` | Exasol database connectivity |
-| `mlx` | `mlx-lm` | Apple Silicon LLM inference (M-series only) |
+| `mlx` | `mlx-lm`, `transformers>=4.47` | Apple Silicon LLM inference (M-series only) |
 | `postgres` | `psycopg2-binary` | PostgreSQL driver |
 | `mysql` | `pymysql` | MySQL driver |
 
@@ -64,7 +67,7 @@ ollama pull qwen2.5-coder:7b      # good alternative for pure SQL tasks
 ollama pull qwen2.5-coder:14b     # better quality, needs more RAM
 ```
 
-**Apple Silicon (M-series)?** Use the MLX backend for better performance — see [MLX Setup](#mlx-apple-silicon).
+**Apple Silicon (M-series)?** Use the MLX backend — see [MLX Setup](#mlx-apple-silicon). The server and model are managed automatically; no terminal command needed.
 
 Using **LM Studio** or **vLLM**? Choose **"OpenAI-compatible API"** in the sidebar's LLM Backend expander.
 
@@ -103,6 +106,8 @@ After connecting, exachat generates 5 starter questions based on your actual sch
 
 Type in plain English — exachat generates SQL, runs it read-only, and shows a plain-English summary, an interactive chart, and the raw data table.
 
+If the generated SQL fails, exachat automatically retries up to 3 times: the LLM diagnoses the error, rewrites the SQL, re-validates safety, and re-executes — all without any action from you. The UI shows live attempt progress ("⚠️ Attempt 2/3 — refining query…") and a collapsed summary of what was corrected on success.
+
 Use the **chart controls** row below each answer to switch chart type, change the x-axis, or select which measures to plot — without re-running the query.
 
 ### 6. Pre-fill with a `.env` file
@@ -123,9 +128,9 @@ EXACHAT_OLLAMA_MODEL=qwen3:8b
 
 Type a question, get SQL + a plain-English summary + an interactive Plotly chart + the raw data table.
 
-- Click **👍** to save the question→SQL pair to the Knowledge Base so future similar questions benefit from it
 - Follow-up questions work naturally — "now filter by last 90 days", "also show average order value"
 - Every answer shows a **Generated SQL** expander, timing, and suggested follow-up questions
+- If a query fails and is auto-corrected, a collapsed green expander shows the original SQL, the error, and what was fixed
 
 ### 📊 Build — Visual Query Builder
 
@@ -143,7 +148,7 @@ Define a metric once (name + SQL or question), save it to the Metrics Catalog, a
 
 ### 🗺️ Schema — ER Diagram
 
-Auto-generated entity-relationship diagram using Mermaid.js. Tables show all column names and their SQL data types. Solid lines indicate exact column-name join paths; dashed lines indicate fuzzy root matches (e.g. `order_id` ↔ `order_id_pseudonyms`). Tables with no detected join path are shown in isolation.
+Auto-generated entity-relationship diagram using Mermaid.js. Tables show all column names and their SQL data types. Solid lines indicate exact column-name join paths; dashed lines indicate fuzzy root matches. Tables with no detected join path are shown in isolation.
 
 ![Schema Relationship Map — auto-generated Mermaid ER diagram](docs/images/screenshot-schema.png)
 
@@ -176,6 +181,12 @@ print(result.summary)      # "The top customer is Acme Corp with $2.3M..."
 print(result.sql)          # SELECT customer_name, SUM(total) AS total_spend ...
 print(result.data)         # pandas DataFrame
 print(result.chart_config) # {"chart_type": "bar", "x": "customer_name", ...}
+
+# Auto-correction fields — populated when a query failed and recovered
+print(result.auto_corrected)          # True / False
+print(result.original_sql)            # the SQL that first failed (if corrected)
+print(result.original_error)          # the DB error from the first attempt
+print(result.correction_explanation)  # what the LLM says it fixed
 ```
 
 ### Using a different LLM backend
@@ -189,7 +200,7 @@ llm = OllamaBackend(model="qwen3:8b")
 # OpenAI-compatible (LM Studio, vLLM, etc.)
 llm = OpenAICompatibleBackend(base_url="http://localhost:1234/v1", model="qwen2.5-coder-14b")
 
-# Apple Silicon MLX
+# Apple Silicon MLX — server starts automatically on first query
 llm = MLXBackend(base_url="http://localhost:8080/v1", model="mlx-community/Qwen3-8B-4bit")
 
 chat = ExasolChat("./data.duckdb", llm=llm)
@@ -262,17 +273,14 @@ with ExasolChat("duckdb:///sales.duckdb") as chat:
 MLX runs models natively on Apple M-series chips via Metal — typically 20–30% faster than Ollama on the same hardware.
 
 ```bash
-# Install (inside your project venv)
 pip install exachat[mlx]
-
-# Start the MLX server (keep running while exachat is open)
-python3 -m mlx_lm.server --model mlx-community/Qwen3-8B-4bit --port 8080
 ```
 
-In the sidebar: **LLM Backend → MLX (Apple Silicon)**.  
-Default server URL: `http://localhost:8080/v1`, model: `mlx-community/Qwen3-8B-4bit`.
+In the sidebar: **LLM Backend → MLX (Apple Silicon)**.
 
-Other recommended MLX models:
+**The server starts automatically.** On first query, exachat spawns the MLX server in the background, waits for the model to load into memory (~30 s the first time), and then runs your query. If the model isn't cached locally, it is downloaded automatically before the server starts. No terminal command needed at any point.
+
+Default server URL: `http://localhost:8080/v1`, model: `mlx-community/Qwen3-8B-4bit`.
 
 | Model | Size | Notes |
 |-------|------|-------|
@@ -283,6 +291,37 @@ Other recommended MLX models:
 ### OpenAI-compatible APIs
 
 Any server implementing `/v1/chat/completions` works — LM Studio, vLLM, text-generation-webui, LocalAI. Select **"OpenAI-compatible API"** in the LLM Backend expander.
+
+---
+
+## Auto-Correct Query Retry
+
+When a generated SQL query fails at execution, exachat does not surface the raw database error immediately. Instead, it automatically retries up to **3 attempts**:
+
+1. The DB error is passed back to the LLM along with the original question and failed SQL
+2. The LLM diagnoses the error and returns a corrected query
+3. The corrected SQL is re-validated for safety and re-executed
+4. If it succeeds, the result is returned normally with a collapsed notice showing what was fixed
+
+The Streamlit UI shows live status during retries: **"⚠️ Attempt 2/3 — refining query…"**
+
+On success after a retry, a collapsed green expander shows:
+- The original (failed) SQL
+- The database error it produced
+- The corrected SQL that was used
+- The LLM's explanation of what was wrong
+
+If all 3 attempts fail, the final error is shown with a collapsible detail panel.
+
+The `QueryResult` object exposes the full correction metadata:
+```python
+result = chat.ask("...")
+
+if result.auto_corrected:
+    print("Original SQL:", result.original_sql)
+    print("Error:", result.original_error)
+    print("Fix:", result.correction_explanation)
+```
 
 ---
 
@@ -321,38 +360,51 @@ With bag-of-words, retrieval is purely keyword-based. With semantic embeddings:
 - `"headcount trend"` finds the `EMPLOYEES` and `DEPARTMENTS` tables
 - SQL patterns like `"year-over-year comparison"` match a question phrased as `"how has revenue changed vs last year?"`
 
-Semantic embeddings are most valuable for databases with **business-domain column/table names** and schemas with **15+ tables** where full schema prompt-stuffing is too noisy.
-
 ### Schema retrieval behaviour
 
 | Schema size | Behaviour |
 |-------------|-----------|
 | ≤ 15 tables | Full schema always included — maximum accuracy |
-| > 15 tables | Top 10 most relevant tables retrieved per query; join-connected tables always included to preserve JOIN paths |
+| > 15 tables | Top 10 most relevant tables retrieved per query; FK-connected tables always included to preserve JOIN paths |
 
 ---
 
 ## Knowledge Base
 
-Successful question→SQL pairs are stored locally in ChromaDB and retrieved as few-shot examples for similar future questions. With semantic embeddings enabled, retrieval is meaning-aware rather than keyword-based.
+exachat ships with **203 enriched SQL patterns** across five business domains. Each pattern includes:
+
+- **Metric nature** — what the metric measures, what it does not, and common misconceptions
+- **Graduated SQL assets** — basic, intermediate, and advanced SQL templates
+- **Inflation & deflation causes** — common reasons the metric is over- or under-counted, each with a diagnostic SQL snippet
+- **Causal relationships** — if/then chains linking symptoms to root causes
+- **Anti-patterns** — specific SQL mistakes with explanations of why they break the metric
+
+### Covered domains
+
+| Domain | Patterns | Examples |
+|--------|----------|---------|
+| eCommerce Orders & Revenue | 10 | GMV, net revenue, AOV, refund rate, discount rate, RPV |
+| eCommerce Customer Lifecycle | 10 | CLV, repeat rate, RFM, cohort retention, CAC, TBO |
+| eCommerce Funnel & Conversion | 9 | Conversion rate, cart abandonment, checkout funnel, PDP-to-cart |
+| eCommerce Inventory & Merchandising | 10 | Inventory turnover, DIO, stockout, sell-through, dead stock |
+| Finance Revenue | 9 | Recognized revenue, deferred revenue, bookings vs billings, upsell rate |
+| Finance Unit Economics | 4 | Gross margin, contribution margin, COGS per unit, operating leverage |
+| Marketing Attribution & Spend | 7 | CAC by channel, ROAS, CPC, CPL, blended CAC, payback period |
+| Marketing Campaign Performance | 5 | CPA by creative, audience overlap, incrementality, frequency fatigue |
+| Product Engagement | 8 | DAU/MAU, session length, feature adoption, stickiness, breadth of use |
+
+Patterns are embedded using the same embedding backend as schema retrieval, so business vocabulary in questions ("conversion dropped", "what's our payback?") maps correctly to the right pattern.
+
+You can also load your own patterns:
 
 ```python
-# Seed with your own patterns:
-chat.train(
-    "quarterly revenue by region",
-    """SELECT region,
-        date_trunc('quarter', order_date) AS quarter,
-        SUM(amount) AS revenue
-    FROM sales.orders
-    GROUP BY ALL
-    ORDER BY quarter, revenue DESC"""
-)
+chat = ExasolChat("./data.duckdb", kb_path="/path/to/your/patterns/")
+```
 
-# Inspect stored pairs:
-print(chat.kb.count)
+Or seed the KB with a question→SQL pair:
 
-# Clear memory:
-chat.rag.clear()
+```python
+chat.kb.load_file("/path/to/pattern.json")
 ```
 
 Patterns persist at `~/.exachat/kb/` by default. Point the UI to a custom directory via the **📖 Knowledge Base** expander or `EXACHAT_KB_PATH` in `.env`.
@@ -364,7 +416,7 @@ Patterns persist at `~/.exachat/kb/` by default. Point the UI to a custom direct
 - **Allowlist-only**: Only `SELECT` and `WITH` (CTE) pass. `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`, `EXEC`, `CALL`, `EXPORT`, `IMPORT`, `COPY`, `ATTACH`, `DETACH`, `INSTALL`, `LOAD` are all blocked before execution.
 - **No `exec()` or `eval()`**: LLM output is never executed as Python code.
 - **Pattern matching**: Blocks `read_csv` / `read_parquet` / `read_json` (DuckDB file access), `pg_sleep`, `BENCHMARK`, statement stacking (`;`-separated queries), `SET`, `PRAGMA`.
-- **Access control enforcement**: The LLM prompt explicitly lists allowed tables; the safety validator cross-checks the generated SQL against the allowlist.
+- **Access control enforcement**: The LLM prompt explicitly lists allowed tables; the safety validator cross-checks the generated SQL against the allowlist — including after auto-correction rewrites.
 - **Read-only connections**: DuckDB files always opened with `read_only=True`. SQLAlchemy uses `SET TRANSACTION READ ONLY` where supported.
 - **Suspicious query warnings**: `UNION SELECT`, tautology injections, and system table access trigger a visible warning badge without blocking execution.
 
@@ -374,42 +426,11 @@ Patterns persist at `~/.exachat/kb/` by default. Point the UI to a custom direct
 
 ## Architecture
 
-```
-Question
-  │
-  ├─► SQL pattern retrieval  (ChromaDB KB — semantic or bag-of-words)
-  ├─► Schema table retrieval (ChromaDB SchemaIndex — only for schemas > 15 tables)
-  │
-  ▼
-LLM Prompt
-  ├── Schema context (relevant tables only for large schemas; full schema for small ones)
-  ├── Join map (detected paths + "no-join" table pairs)
-  ├── Dialect hints (DuckDB / PostgreSQL / Exasol)
-  ├── Few-shot SQL pattern examples (from KB retrieval)
-  └── Conversation history (follow-up support)
-  │
-  ▼
-SQL Generation → Safety Validation → Query Execution (read-only)
-  │
-  ▼
-Summary · Chart · DataFrame · Follow-up Suggestions · KB feedback loop
-```
+![exachat architecture — SQL generation pipeline](docs/images/architecture.svg)
 
-### Module map
+The diagram shows the full SQL generation pipeline: from a natural language question through KB retrieval, schema narrowing, LLM generation, safety validation, auto-correct retry loop, and result enrichment.
 
-| Module | Purpose |
-|--------|---------|
-| `app.py` | Streamlit UI — 4 tabs (Ask / Build / Metrics / Schema), compact sidebar, chart controls |
-| `app_builder.py` | Visual Query Builder — dimension / measure / filter / sort UI → SQL |
-| `core.py` | Engine — orchestrates the full `ask()` pipeline |
-| `llm.py` | LLM backends — Ollama, MLX, OpenAI-compatible; dialect hints; prompt construction |
-| `schema.py` | Schema introspection + join inference (exact + fuzzy column-name matching) |
-| `safety.py` | SQL validation — allowlist, DDL/DML blocking, injection pattern detection |
-| `connection.py` | Connection management — pyexasol, DuckDB native (read-only), SQLAlchemy |
-| `builder.py` | QueryBuilder — programmatic SELECT / GROUP BY / filter / sort → schema-qualified SQL |
-| `metrics.py` | Metrics Catalog — save / load / run named KPI queries from JSON |
-| `kb.py` | Knowledge Base + Schema Index — ChromaDB store for Q→SQL patterns and per-table schema retrieval; bag-of-words (default), FastEmbed, Ollama, or OpenAI-compatible embeddings |
-| `charts.py` | Auto-charting — Plotly bar / line / area / scatter / pie / heatmap |
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full component breakdown and a Mermaid flowchart of the pipeline.
 
 ---
 
@@ -455,6 +476,26 @@ chat = ExasolChat(
 
 ---
 
+## Module Map
+
+| Module | Purpose |
+|--------|---------|
+| `app.py` | Streamlit UI — 4 tabs (Ask / Build / Metrics / Schema), compact sidebar, chart controls, retry status |
+| `app_builder.py` | Visual Query Builder — dimension / measure / filter / sort UI → SQL |
+| `core.py` | Engine — orchestrates the full `ask()` pipeline including auto-correct retry loop |
+| `llm.py` | LLM backends — Ollama, MLX (auto-start), OpenAI-compatible; dialect hints; `fix_sql()` for auto-correction |
+| `schema.py` | Schema introspection + join inference (exact + fuzzy column-name matching) |
+| `safety.py` | SQL validation — allowlist, DDL/DML blocking, injection pattern detection |
+| `connection.py` | Connection management — pyexasol, DuckDB native (read-only), SQLAlchemy |
+| `builder.py` | QueryBuilder — programmatic SELECT / GROUP BY / filter / sort → schema-qualified SQL |
+| `metrics.py` | Metrics Catalog — save / load / run named KPI queries from JSON |
+| `kb.py` | Knowledge Base + Schema Index — ChromaDB store; 203 built-in domain patterns; bag-of-words / FastEmbed / Ollama / OpenAI embeddings |
+| `charts.py` | Auto-charting — Plotly bar / line / area / scatter / pie |
+| `cli.py` | CLI entrypoint — setup wizard, MLX server auto-start, model auto-download |
+| `setup_wizard.py` | First-time setup — LLM backend selection, MLX model cache check and download |
+
+---
+
 ## Limitations
 
 - **SQL accuracy = LLM quality.** Smaller models produce worse SQL. 7B+ recommended; 14B+ for complex schemas or many tables.
@@ -462,6 +503,7 @@ chat = ExasolChat(
 - **Join inference is heuristic.** Column-name similarity works well for conventional naming; semantic joins (different names, same concept) are not detected automatically, though semantic embeddings reduce this gap for schema retrieval.
 - **Charts are LLM-suggested.** Usually correct — use the chart controls in the UI to override type, axes, and measures.
 - **Embedding model download required on first use.** FastEmbed downloads ~130 MB on first connect; requires an internet connection once.
+- **MLX is Apple Silicon only.** The MLX backend requires an M-series Mac. On other platforms, use Ollama or an OpenAI-compatible API instead.
 
 ---
 
