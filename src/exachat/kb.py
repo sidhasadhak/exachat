@@ -254,26 +254,55 @@ def build_embedding_fn(
 
 
 def _embed_text(chunk: dict) -> str:
-    """Build the text to embed for a KB chunk."""
+    """Build the text to embed for a KB chunk.
+
+    Handles both the legacy flat format (strings/lists-of-strings) and the
+    enriched domain format where ``anti_patterns`` and other fields are
+    lists-of-dicts.  Also surfaces ``retrieval_metadata.synonyms`` and
+    ``retrieval_metadata.query_examples`` to improve semantic matching.
+    """
     parts = [chunk.get("title", "")]
 
     tags = chunk.get("intent_tags", [])
     if isinstance(tags, list):
-        parts.append(" ".join(tags))
+        parts.append(" ".join(str(t) for t in tags))
     elif isinstance(tags, str):
         parts.append(tags)
 
     when = chunk.get("when_to_use", "")
     if isinstance(when, list):
-        parts.append(" ".join(when))
+        parts.append(" ".join(str(w) for w in when))
     elif isinstance(when, str):
         parts.append(when)
 
+    # anti_patterns: list[str] (legacy) or list[dict] (enriched)
     anti = chunk.get("anti_patterns", [])
     if isinstance(anti, list):
-        parts.append(" ".join(anti))
+        anti_parts = []
+        for a in anti:
+            if isinstance(a, str):
+                anti_parts.append(a)
+            elif isinstance(a, dict):
+                anti_parts.append(" ".join(filter(None, [
+                    a.get("pattern", ""),
+                    a.get("anti_pattern", ""),
+                    a.get("why_wrong", ""),
+                    a.get("why_it_breaks", ""),
+                ])))
+        if anti_parts:
+            parts.append(" ".join(anti_parts))
     elif isinstance(anti, str):
         parts.append(anti)
+
+    # retrieval_metadata: synonyms + query_examples widen the recall surface
+    rm = chunk.get("retrieval_metadata", {})
+    if isinstance(rm, dict):
+        synonyms = rm.get("synonyms", [])
+        if isinstance(synonyms, list):
+            parts.append(" ".join(str(s) for s in synonyms))
+        query_examples = rm.get("query_examples", [])
+        if isinstance(query_examples, list):
+            parts.append(" ".join(str(q) for q in query_examples))
 
     return " ".join(p for p in parts if p)
 
@@ -365,11 +394,16 @@ class KnowledgeBase:
                 doc_id = str(chunk.get("id") or hashlib.sha256(
                     json.dumps(chunk, sort_keys=True).encode()
                 ).hexdigest()[:16])
+                # Compute all three values BEFORE any append so a failure in
+                # _embed_text (e.g. unexpected types) cannot leave ids/documents/
+                # metadatas with unequal lengths.
+                doc_text = _embed_text(chunk)
+                chunk_json = json.dumps(chunk)
                 ids.append(doc_id)
-                documents.append(_embed_text(chunk))
-                metadatas.append({"chunk_json": json.dumps(chunk)})
-            except Exception:
-                pass
+                documents.append(doc_text)
+                metadatas.append({"chunk_json": chunk_json})
+            except Exception as exc:
+                logger.warning("Skipping KB chunk %r: %s", chunk.get("id", "?"), exc)
         if ids:
             self._collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
         return len(ids)
@@ -390,24 +424,110 @@ class KnowledgeBase:
         return patterns
 
     def format_for_prompt(self, patterns: list[dict], dialect: str = "") -> str:
-        """Render retrieved patterns as a prompt snippet."""
+        """Render retrieved patterns as a prompt snippet.
+
+        Handles both the legacy flat format and the enriched domain format
+        (anti_patterns as dicts, sql_assets, inflation/deflation causes,
+        causal_relationships, metric_nature, diagnostic_questions).
+        """
         parts = []
         for p in patterns:
             lines = [f"-- Pattern: {p.get('title', '')}"]
+
+            # metric_nature: string (legacy) or dict with what_it_measures etc. (enriched)
+            nature = p.get("metric_nature", "")
+            if isinstance(nature, dict):
+                what = nature.get("what_it_measures", "")
+                what_not = nature.get("what_it_does_not_measure", "")
+                misconception = nature.get("common_misconception", "")
+                nature_parts = []
+                if what:
+                    nature_parts.append(f"Measures: {what}")
+                if what_not:
+                    nature_parts.append(f"Does NOT measure: {what_not}")
+                if misconception:
+                    nature_parts.append(f"Misconception: {misconception}")
+                if nature_parts:
+                    lines.append("-- Metric nature:\n" + "\n".join(f"   {n}" for n in nature_parts))
+            elif nature:
+                lines.append(f"-- Metric nature: {nature}")
 
             when = p.get("when_to_use", "")
             if when:
                 when_str = "; ".join(when) if isinstance(when, list) else when
                 lines.append(f"-- Use when: {when_str}")
 
+            # sql_assets: graduated SQL templates (basic / intermediate / advanced)
+            sql_assets = p.get("sql_assets", {})
+            if isinstance(sql_assets, dict):
+                for level in ("basic", "intermediate", "advanced"):
+                    sql = sql_assets.get(level, "")
+                    if sql:
+                        lines.append(f"-- SQL ({level}):\n{sql}")
+            elif isinstance(sql_assets, str) and sql_assets:
+                lines.append(f"-- SQL:\n{sql_assets}")
+
+            # Legacy single template field
             template = p.get("template", "")
-            if template:
+            if template and not sql_assets:
                 lines.append(f"-- Template:\n{template}")
 
+            # anti_patterns: list[str] (legacy) or list[dict] (enriched)
             anti = p.get("anti_patterns", [])
             if anti:
-                anti_str = "; ".join(anti) if isinstance(anti, list) else anti
-                lines.append(f"-- Avoid: {anti_str}")
+                if isinstance(anti, list):
+                    anti_strs = []
+                    for a in anti:
+                        if isinstance(a, str):
+                            anti_strs.append(a)
+                        elif isinstance(a, dict):
+                            label = a.get("pattern") or a.get("anti_pattern", "")
+                            why = a.get("why_wrong") or a.get("why_it_breaks", "")
+                            entry = f"{label}: {why}" if why else label
+                            if entry:
+                                anti_strs.append(entry)
+                    if anti_strs:
+                        lines.append("-- Avoid:\n" + "\n".join(f"   • {s}" for s in anti_strs))
+                elif isinstance(anti, str):
+                    lines.append(f"-- Avoid: {anti}")
+
+            # inflation/deflation causes with optional detection SQL
+            for direction in ("inflation_causes", "deflation_causes"):
+                causes = p.get(direction, [])
+                if not isinstance(causes, list) or not causes:
+                    continue
+                label = "Inflation causes" if direction == "inflation_causes" else "Deflation causes"
+                cause_lines = []
+                for c in causes:
+                    if isinstance(c, str):
+                        cause_lines.append(f"   • {c}")
+                    elif isinstance(c, dict):
+                        cause_text = c.get("cause", c.get("signal", ""))
+                        det_sql = c.get("detection_sql", "")
+                        if cause_text:
+                            cause_lines.append(f"   • {cause_text}")
+                        if det_sql:
+                            cause_lines.append(f"     Detection: {det_sql}")
+                if cause_lines:
+                    lines.append(f"-- {label}:\n" + "\n".join(cause_lines))
+
+            # causal_relationships: if/then diagnostic chains
+            causal = p.get("causal_relationships", [])
+            if isinstance(causal, list) and causal:
+                causal_lines = []
+                for cr in causal:
+                    if isinstance(cr, dict):
+                        if_cond = cr.get("if", "")
+                        then_res = cr.get("then", "")
+                        action = cr.get("action", "")
+                        entry = f"   • If {if_cond} → {then_res}"
+                        if action:
+                            entry += f" (action: {action})"
+                        causal_lines.append(entry)
+                    elif isinstance(cr, str):
+                        causal_lines.append(f"   • {cr}")
+                if causal_lines:
+                    lines.append("-- Causal relationships:\n" + "\n".join(causal_lines))
 
             hints = p.get("llm_hints", "")
             if hints:
