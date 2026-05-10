@@ -426,7 +426,7 @@ Patterns persist at `~/.exachat/kb/` by default. Point the UI to a custom direct
 
 ## Architecture
 
-![exachat architecture — SQL generation pipeline](docs/images/architecture.svg)
+![exachat architecture — SQL generation pipeline](docs/images/architecture.png)
 
 The diagram shows the full SQL generation pipeline: from a natural language question through KB retrieval, schema narrowing, LLM generation, safety validation, auto-correct retry loop, and result enrichment.
 
