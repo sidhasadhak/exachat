@@ -716,11 +716,33 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
     key = hash(r.question)
 
     if r.error:
-        st.error(r.error)
+        # Plain-English lead — strip the raw exception prefix for cleaner display
+        _err_display = r.error
+        for _prefix in ("Query execution failed: ", "Query blocked: ", "LLM generation failed: "):
+            if _err_display.startswith(_prefix):
+                _err_display = _err_display[len(_prefix):]
+                break
+        st.error(f"**Query failed** — {_err_display}")
+        if r.original_error and r.original_error != _err_display:
+            with st.expander("📋 Error detail", expanded=False):
+                st.code(r.original_error, language="text")
         if r.sql:
-            with st.expander("🔍 Generated SQL"):
+            with st.expander("🔍 Generated SQL", expanded=False):
                 st.code(r.sql, language="sql")
         return
+
+    if r.auto_corrected:
+        with st.expander("✅ Query had an issue that was automatically corrected", expanded=False):
+            if r.correction_explanation:
+                st.caption(r.correction_explanation)
+            if r.original_sql:
+                st.markdown("**Original SQL (failed):**")
+                st.code(r.original_sql, language="sql")
+            if r.original_error:
+                st.markdown("**Error:**")
+                st.code(r.original_error, language="text")
+            st.markdown("**Corrected SQL (used):**")
+            st.code(r.sql, language="sql")
 
     if r.column_warnings:
         for w in r.column_warnings:
@@ -1588,10 +1610,25 @@ with tab_ask:
         # This keeps the chat_input anchored at the bottom and ensures each
         # follow-up appears as a new entry below the previous one.
         st.session_state.messages.append({"role": "user", "content": question})
-        with st.spinner("Thinking…"):
-            _t0 = time.perf_counter()
-            result = chat_engine.ask(question)
-            _elapsed = time.perf_counter() - _t0
+
+        _status = st.empty()
+        _status.markdown(
+            '<div style="color:#a4a4ad;font-size:0.85rem;">⏳ Thinking…</div>',
+            unsafe_allow_html=True,
+        )
+
+        def _on_attempt(attempt: int, total: int) -> None:
+            _status.markdown(
+                f'<div style="color:#f0a800;font-size:0.85rem;">'
+                f'⚠️ Attempt {attempt}/{total} — refining query…</div>',
+                unsafe_allow_html=True,
+            )
+
+        _t0 = time.perf_counter()
+        result = chat_engine.ask(question, on_attempt=_on_attempt)
+        _elapsed = time.perf_counter() - _t0
+        _status.empty()
+
         st.session_state.messages.append({
             "role": "assistant",
             "result": result,

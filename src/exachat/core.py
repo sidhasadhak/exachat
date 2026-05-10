@@ -46,6 +46,11 @@ class QueryResult:
     kb_patterns_used: int = 0
     column_warnings: list[str] = None
     followups: list[str] = None
+    # Auto-correction fields — set when a query failed then recovered
+    auto_corrected: bool = False
+    original_sql: Optional[str] = None      # the SQL that first failed
+    original_error: Optional[str] = None    # the error from the first attempt
+    correction_explanation: Optional[str] = None  # what the LLM says it fixed
 
     def __post_init__(self):
         if self.column_warnings is None:
@@ -182,8 +187,20 @@ class ExasolChat:
         else:
             self.schema_context.extra_context = context
 
-    def ask(self, question: str) -> QueryResult:
-        """Ask a natural language question. Returns SQL + data + chart."""
+    def ask(
+        self,
+        question: str,
+        on_attempt: Optional[callable] = None,
+        max_attempts: int = 3,
+    ) -> QueryResult:
+        """Ask a natural language question. Returns SQL + data + chart.
+
+        Args:
+            question:    Natural language question.
+            on_attempt:  Optional callback(attempt: int, total: int) called
+                         before each retry attempt (not called on attempt 1).
+            max_attempts: Maximum execution attempts (default 3).
+        """
 
         # 1. KB retrieval — find relevant SQL patterns
         kb_patterns = []
@@ -265,18 +282,78 @@ class ExasolChat:
         if "postgres" in _dialect or "postgresql" in _dialect:
             exec_sql = _pg_fix_timestamp_casts(exec_sql)
 
-        try:
-            df = self._db.execute_query(exec_sql, self.max_rows)
-        except Exception as e:
-            result = QueryResult(
-                question=question, sql=exec_sql, safety=verdict,
-                error=f"Query execution failed: {e}",
-                explanation=llm_resp.explanation,
-                kb_patterns_used=len(kb_patterns),
-                column_warnings=column_warnings,
-            )
-            self._history.append(result)
-            return result
+        # ── Execute with auto-correction loop (up to max_attempts) ──────────
+        current_sql = exec_sql
+        current_verdict = verdict
+        original_sql = exec_sql          # the first SQL that was tried
+        original_error: Optional[str] = None
+        auto_corrected = False
+        correction_explanation: Optional[str] = None
+        df = None
+
+        for attempt in range(1, max_attempts + 1):
+            # Notify UI on retry attempts (not on the first attempt)
+            if attempt > 1 and on_attempt:
+                try:
+                    on_attempt(attempt, max_attempts)
+                except Exception:
+                    pass
+
+            try:
+                df = self._db.execute_query(current_sql, self.max_rows)
+                if attempt > 1:
+                    auto_corrected = True
+                break  # success — exit retry loop
+
+            except Exception as e:
+                err_str = str(e)
+                if original_error is None:
+                    original_error = err_str  # capture first failure only
+
+                if attempt == max_attempts:
+                    # All attempts exhausted — return final error
+                    result = QueryResult(
+                        question=question, sql=current_sql, safety=current_verdict,
+                        error=f"Query execution failed: {err_str}",
+                        explanation=llm_resp.explanation,
+                        kb_patterns_used=len(kb_patterns),
+                        column_warnings=column_warnings,
+                        original_sql=original_sql if attempt > 1 else None,
+                        original_error=original_error,
+                    )
+                    self._history.append(result)
+                    return result
+
+                # Ask the LLM to diagnose and fix the SQL
+                try:
+                    fix_resp = self.llm.fix_sql(question, current_sql, err_str)
+                    fixed_sql = sanitize_sql(fix_resp.sql)
+
+                    # Re-validate safety before running the fixed SQL
+                    fixed_verdict = validate_sql(
+                        fixed_sql,
+                        allowed_schemas=self._allowed_schemas,
+                        allowed_tables=self._allowed_tables,
+                    )
+                    if fixed_verdict.level == RiskLevel.BLOCKED:
+                        result = QueryResult(
+                            question=question, sql=fixed_sql, safety=fixed_verdict,
+                            error=f"Fixed query blocked: {fixed_verdict.reason}",
+                            explanation=fix_resp.explanation,
+                            kb_patterns_used=len(kb_patterns),
+                            column_warnings=column_warnings,
+                        )
+                        self._history.append(result)
+                        return result
+
+                    # Apply the same post-processing pipeline to fixed SQL
+                    current_sql = self.schema_context.denormalize_sql(fixed_sql)
+                    if "postgres" in _dialect or "postgresql" in _dialect:
+                        current_sql = _pg_fix_timestamp_casts(current_sql)
+                    current_verdict = fixed_verdict
+                    correction_explanation = fix_resp.explanation or f"Auto-corrected on attempt {attempt + 1}"
+                except Exception:
+                    pass  # fix_sql failed — retry loop will try again or exhaust
 
         # 5. Generate summary
         summary = None
@@ -307,13 +384,17 @@ class ExasolChat:
             pass
 
         result = QueryResult(
-            question=question, sql=exec_sql, safety=verdict,
+            question=question, sql=current_sql, safety=current_verdict,
             data=df, summary=summary,
             chart_config=chart_config, chart_obj=chart_obj,
             explanation=llm_resp.explanation,
             kb_patterns_used=len(kb_patterns),
             column_warnings=column_warnings,
             followups=followups,
+            auto_corrected=auto_corrected,
+            original_sql=original_sql if auto_corrected else None,
+            original_error=original_error if auto_corrected else None,
+            correction_explanation=correction_explanation,
         )
         self._history.append(result)
         return result

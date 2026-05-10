@@ -222,6 +222,40 @@ Respond with ONLY a JSON object (no markdown fences, no explanation):
 }}
 Use "table_only" if the data isn't well-suited for charting (e.g., single row, text-heavy)."""
 
+    def _build_fix_prompt(self, question: str, failed_sql: str, error: str) -> str:
+        return f"""You are a SQL expert. A SQL query failed with an error. Diagnose the problem and return a corrected query.
+
+ORIGINAL QUESTION: {question}
+
+FAILED SQL:
+```sql
+{failed_sql}
+```
+
+ERROR MESSAGE:
+{error}
+
+RULES:
+- Return ONLY a SELECT query. No INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, or DDL.
+- Fix the exact error described. Do not change the intent of the query.
+- Return corrected SQL inside a ```sql code block.
+- After the SQL, write 1 sentence explaining what was wrong and what you fixed.
+- If the error is about a missing column, check if you used the wrong column name or alias.
+- If the error is about a type mismatch, add the appropriate CAST.
+- If the error is about an ambiguous column, qualify it with the table name or alias.
+- Do NOT invent columns or tables that are not in the original query."""
+
+    def fix_sql(self, question: str, failed_sql: str, error: str) -> "LLMResponse":
+        """Ask the LLM to diagnose and fix a failed SQL query.
+
+        Subclasses inherit this — they only need to implement _chat().
+        """
+        prompt = self._build_fix_prompt(question, failed_sql, error)
+        raw = self._chat(prompt, temperature=0.0)
+        sql = self._extract_sql(raw)
+        explanation = raw.split("```")[-1].strip() if "```" in raw else raw.strip()
+        return LLMResponse(sql=sql, explanation=explanation, raw=raw)
+
     def _extract_json_list(self, text: str) -> list[str]:
         """Extract a JSON string array from LLM output."""
         try:
