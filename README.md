@@ -1,4 +1,4 @@
-# ⚡ TalonSight
+# 🦉 TalonSight
 
 **Ask your database anything — in plain English. Get SQL, data, and interactive charts.**
 
