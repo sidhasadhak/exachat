@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+# ── sys.path fix ──────────────────────────────────────────────────────────────
+# Streamlit inserts the script's own directory (site-packages/talonsight/) at
+# sys.path[0], so "import talonsight" resolves to talonsight/talonsight/ — not
+# found.  Fix: ensure site-packages/ (the parent) is on sys.path first.
+import sys as _sys, pathlib as _pl
+_here = _pl.Path(__file__).resolve().parent   # …/site-packages/talonsight
+_site = str(_here.parent)                      # …/site-packages
+if _site not in _sys.path:
+    _sys.path.insert(0, _site)
+del _sys, _pl, _here, _site
+# ─────────────────────────────────────────────────────────────────────────────
+
 import os
 import sys
 import platform
