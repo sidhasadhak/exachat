@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "talonsight"
-version = "0.5.0"
+version = "0.6.0"
 description = "Ask your database anything — safe text-to-SQL with local LLMs, RAG memory, and interactive charts."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -36,7 +36,6 @@ dependencies = [
 exasol     = ["pyexasol>=0.25", "sqlalchemy-exasol>=5.0"]
 postgres   = ["psycopg2-binary>=2.9"]
 mysql      = ["pymysql>=1.1"]
-embeddings = ["fastembed>=0.3"]
 # mlx-lm only installs on Apple Silicon (arm64 macOS); skipped silently elsewhere
 mlx        = ["mlx-lm>=0.22; sys_platform=='darwin' and platform_machine=='arm64'"]
 all        = [
