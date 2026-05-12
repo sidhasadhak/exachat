@@ -278,6 +278,18 @@ Use "table_only" if the data isn't well-suited for charting (e.g., single row, t
                 "Check capitalisation and schema prefix."
             )
 
+        # PostgreSQL ROUND precision — must come before generic function-not-found check
+        if ("round" in e and "does not exist" in e and
+                ("double precision" in e or "float" in e or "real" in e)):
+            return (
+                "DIAGNOSIS: PostgreSQL's ROUND() only accepts NUMERIC for the two-argument form — "
+                "ROUND(double precision, integer) does not exist. "
+                "AVG(), SUM()/COUNT() division, and most arithmetic return double precision. "
+                "FIX: Cast to numeric before rounding: ROUND(AVG(col)::numeric, 2) or "
+                "ROUND(CAST(AVG(col) AS NUMERIC), 2). "
+                "Apply this to every ROUND(expr, n) in the query where expr may be double precision."
+            )
+
         if "function" in e and "does not exist" in e:
             return (
                 "DIAGNOSIS: A function name or its argument types are wrong for this SQL dialect. "

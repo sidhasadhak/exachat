@@ -280,7 +280,7 @@ class TalonSight:
         # that are common in CSV-loaded data and cause InvalidDatetimeFormat errors.
         _dialect = (self.schema_context.dialect or "").lower()
         if "postgres" in _dialect or "postgresql" in _dialect:
-            exec_sql = _pg_fix_timestamp_casts(exec_sql)
+            exec_sql = _pg_post_process(exec_sql)
 
         # ── Execute with auto-correction loop (up to max_attempts) ──────────
         current_sql = exec_sql
@@ -352,7 +352,7 @@ class TalonSight:
                     # Apply the same post-processing pipeline to fixed SQL
                     current_sql = self.schema_context.denormalize_sql(fixed_sql)
                     if "postgres" in _dialect or "postgresql" in _dialect:
-                        current_sql = _pg_fix_timestamp_casts(current_sql)
+                        current_sql = _pg_post_process(current_sql)
                     current_verdict = fixed_verdict
                     correction_explanation = fix_resp.explanation or f"Auto-corrected on attempt {attempt + 1}"
                 except Exception:
@@ -563,6 +563,89 @@ class TalonSight:
 
 def _normalise(name: str) -> str:
     return re.sub(r"[\s_]+", "", name.lower())
+
+
+def _pg_fix_round(sql: str) -> str:
+    """Rewrite ROUND(expr, n) → ROUND((expr)::numeric, n) for PostgreSQL.
+
+    PostgreSQL only defines ROUND(numeric, integer).  AVG(), SUM()/COUNT(),
+    and float-column division all return double precision, so
+    ROUND(AVG(price), 2) raises "function round(double precision, integer)
+    does not exist".  Casting to ::numeric before ROUND fixes it.
+
+    Uses balanced-parenthesis walking so deeply nested expressions such as
+    ROUND(AVG(NULLIF(col, 0)), 2) are handled correctly.
+    Skips expressions already ending in ::numeric or CAST(... AS NUMERIC).
+    """
+    out: list[str] = []
+    pos = 0
+
+    for m in re.finditer(r'\bROUND\s*\(', sql, re.IGNORECASE):
+        open_pos = m.end() - 1          # index of '('
+
+        # Find matching ')' via balanced-paren walk
+        depth      = 0
+        close_pos  = -1
+        for i in range(open_pos, len(sql)):
+            if sql[i] == '(':
+                depth += 1
+            elif sql[i] == ')':
+                depth -= 1
+                if depth == 0:
+                    close_pos = i
+                    break
+
+        if close_pos < 0:
+            continue                     # unbalanced — leave unchanged
+
+        inner = sql[open_pos + 1: close_pos]
+
+        # Find the last top-level comma (separates expr from precision arg)
+        last_comma = -1
+        d = 0
+        for i, c in enumerate(inner):
+            if c == '(':
+                d += 1
+            elif c == ')':
+                d -= 1
+            elif c == ',' and d == 0:
+                last_comma = i
+
+        if last_comma < 0:
+            continue                     # ROUND(expr) single-arg — leave alone
+
+        expr = inner[:last_comma].strip()
+        prec = inner[last_comma + 1:].strip()
+
+        # Only rewrite when precision is a bare integer literal
+        if not re.match(r'^\d+$', prec):
+            continue
+
+        # Skip if already cast to numeric
+        el = expr.lower()
+        if el.endswith('::numeric') or el.endswith('::decimal') or 'as numeric' in el:
+            continue
+
+        out.append(sql[pos: m.start()])
+        out.append(f'ROUND(({expr})::numeric, {prec})')
+        pos = close_pos + 1
+
+    out.append(sql[pos:])
+    return ''.join(out)
+
+
+def _pg_post_process(sql: str) -> str:
+    """Run the full PostgreSQL post-processing pipeline on a generated SQL string.
+
+    Applied to every query before first execution and to every auto-corrected
+    query before retry execution.  Order matters:
+      1. Timestamp/date casts   — alias.col::timestamp  →  NULLIF(alias.col,'')::timestamp
+      2. Interval-to-days       — expr::numeric/86400   →  EXTRACT(EPOCH FROM expr)/86400
+      3. ROUND precision cast   — ROUND(expr, n)        →  ROUND(expr::numeric, n)
+    """
+    sql = _pg_fix_timestamp_casts(sql)
+    sql = _pg_fix_round(sql)
+    return sql
 
 
 def _pg_rewrite_interval_to_days(sql: str) -> str:
