@@ -231,14 +231,20 @@ Respond with ONLY a JSON object (no markdown fences, no explanation):
 Use "table_only" if the data isn't well-suited for charting (e.g., single row, text-heavy)."""
 
     @staticmethod
-    def _classify_sql_error(error: str) -> str:
+    def _classify_sql_error(error: str) -> str:  # noqa: C901 (intentionally long)
         """Return a targeted diagnostic hint based on the database error message.
 
         These hints are injected into the fix prompt so the LLM knows exactly
         what class of fix is needed without having to infer it from the raw
         error string (which varies across databases).
+
+        Checks are ordered most-specific → least-specific so that a narrow
+        pattern wins over a broad one (e.g. "cannot cast type" fires before
+        the generic invalid-syntax fallback).
         """
         e = error.lower()
+
+        # ── Reference / name errors ───────────────────────────────────────────
 
         # PostgreSQL: alias mistaken for a schema name — common when LLM writes
         # alias.FUNCTION(col) instead of FUNCTION(alias.col)
@@ -248,6 +254,14 @@ Use "table_only" if the data isn't well-suited for charting (e.g., single row, t
                 "This happens when a function call is prefixed with a table alias, e.g. "
                 "`alias.NULLIF(col, '')` — SQL parsers read `alias` as a schema, not an alias. "
                 "FIX: Move the alias inside the function argument: `NULLIF(alias.col, '')`."
+            )
+
+        # Missing JOIN / alias not declared (PG: "missing FROM-clause entry for table X")
+        if "missing from-clause entry" in e or ("unknown table" in e and "from" not in e):
+            return (
+                "DIAGNOSIS: A table alias or table name is used in the query but was never "
+                "declared in a FROM or JOIN clause. "
+                "FIX: Add the missing JOIN, or correct the alias to match one already in the query."
             )
 
         if ("column" in e or "field" in e) and "does not exist" in e:
@@ -264,25 +278,157 @@ Use "table_only" if the data isn't well-suited for charting (e.g., single row, t
                 "Check capitalisation and schema prefix."
             )
 
-        if "ambiguous" in e and "column" in e:
+        if "function" in e and "does not exist" in e:
+            return (
+                "DIAGNOSIS: A function name or its argument types are wrong for this SQL dialect. "
+                "FIX: Check the correct function name (e.g. STRFTIME vs TO_CHAR vs FORMAT), "
+                "or add an explicit CAST on the argument to match the expected type."
+            )
+
+        if "ambiguous" in e and ("column" in e or "field" in e):
             return (
                 "DIAGNOSIS: A column name is ambiguous — it exists in more than one joined table. "
                 "FIX: Qualify every ambiguous column with its table alias (e.g. `t.column_name`)."
             )
 
-        if "syntax error" in e or "parse error" in e:
+        # ── Aggregation / grouping errors ─────────────────────────────────────
+
+        if (
+            "must appear in the group by" in e          # PostgreSQL
+            or ("not in aggregate" in e and "group by" in e)  # MySQL / DuckDB
+            or "is not in aggregate function and not in group by" in e
+            or "not contained in either an aggregate function or the group by" in e
+        ):
+            return (
+                "DIAGNOSIS: A non-aggregated column appears in the SELECT (or ORDER BY) "
+                "but is missing from the GROUP BY clause. "
+                "FIX: Either add the column to GROUP BY, or wrap it in an aggregate function "
+                "such as MAX(), MIN(), or ANY_VALUE() if the value is the same per group."
+            )
+
+        if "cannot be nested" in e and ("window" in e or "aggregate" in e):
+            return (
+                "DIAGNOSIS: Window functions or aggregate functions cannot be directly nested. "
+                "FIX: Split into two query levels — compute the inner aggregate in a subquery "
+                "or CTE, then apply the outer window/aggregate to that result."
+            )
+
+        if ("window function" in e or "aggregate function" in e) and (
+            "where clause" in e or "not allowed in" in e or "not permitted" in e
+        ):
+            return (
+                "DIAGNOSIS: Window functions and aggregate functions are not allowed in a WHERE clause. "
+                "FIX: For aggregates, move the filter to HAVING. "
+                "For window functions, wrap the query in a subquery or CTE and filter in the outer query."
+            )
+
+        # ── Type / cast errors ────────────────────────────────────────────────
+
+        # Specific explicit-cast failure before generic syntax fallback
+        if ("cannot cast type" in e or "cannot be cast" in e or
+                ("cast" in e and "does not exist" in e)):
+            return (
+                "DIAGNOSIS: An explicit type cast is impossible between these two types. "
+                "FIX: Use an intermediate cast (e.g. cast to TEXT first, then to the target type), "
+                "or restructure to avoid the cast (e.g. use EXTRACT instead of casting a timestamp "
+                "to integer, or DATE_PART instead of ::int on an interval)."
+            )
+
+        if "could not determine data type" in e or "indeterminate type" in e:
+            return (
+                "DIAGNOSIS: The database cannot infer the data type of an expression — "
+                "typically a bare NULL, an empty string literal, or a CASE branch "
+                "where all arms are NULL. "
+                "FIX: Add an explicit CAST, e.g. CAST(NULL AS TEXT), CAST(NULL AS NUMERIC), "
+                "or CAST('' AS DATE) to tell the planner the intended type."
+            )
+
+        if "operator does not exist" in e:
+            return (
+                "DIAGNOSIS: A comparison or arithmetic operator is being applied to "
+                "incompatible types (e.g. integer = text). "
+                "FIX: Add an explicit CAST on one side so both operands share the same type, "
+                "e.g. CAST(col AS TEXT) = 'value'  or  col = CAST('123' AS INTEGER)."
+            )
+
+        if "invalid input syntax" in e or "invalid datetime" in e:
+            return (
+                "DIAGNOSIS: A string value cannot be parsed into the target type "
+                "(e.g. an empty string or non-numeric text being cast to a number or date). "
+                "FIX: Guard with NULLIF(col, '') before casting, "
+                "use TRY_CAST / TRY_TO_DATE where the dialect supports it, "
+                "or filter with WHERE col ~ '^[0-9]+$' before casting."
+            )
+
+        if ("date" in e or "timestamp" in e) and ("out of range" in e or "invalid" in e or "format" in e):
+            return (
+                "DIAGNOSIS: A date or timestamp literal is in the wrong format or outside the "
+                "valid range for this database. "
+                "FIX: Use ISO-8601 format (YYYY-MM-DD or YYYY-MM-DD HH:MI:SS), "
+                "or wrap with TO_DATE(col, 'format') / TO_TIMESTAMP(col, 'format') to parse explicitly."
+            )
+
+        if ("overflow" in e or "out of range" in e) and (
+            "integer" in e or "numeric" in e or "bigint" in e or "smallint" in e
+        ):
+            return (
+                "DIAGNOSIS: A numeric computation overflows the column's data type. "
+                "FIX: CAST intermediate values or the column to BIGINT or NUMERIC(precision, scale) "
+                "before arithmetic to avoid overflow."
+            )
+
+        # ── Subquery errors ───────────────────────────────────────────────────
+
+        if "more than one row" in e or "subquery used as an expression" in e:
+            return (
+                "DIAGNOSIS: A scalar subquery (used in SELECT or WHERE with =) "
+                "returned more than one row. "
+                "FIX: Add LIMIT 1 inside the subquery, use an aggregate (MAX/MIN/AVG), "
+                "or replace `= (subquery)` with `IN (subquery)`."
+            )
+
+        # ── UNION errors ──────────────────────────────────────────────────────
+
+        if "union" in e and ("number of columns" in e or "types" in e or "cannot be matched" in e):
+            return (
+                "DIAGNOSIS: The branches of a UNION / UNION ALL are incompatible. "
+                "FIX: Ensure every SELECT branch has the same number of columns "
+                "and that corresponding columns have compatible types "
+                "(add explicit CASTs where needed, e.g. CAST(col AS TEXT))."
+            )
+
+        # ── Structural / syntax errors ────────────────────────────────────────
+
+        if "duplicate column" in e or "duplicate alias" in e or "specified more than once" in e:
+            return (
+                "DIAGNOSIS: Two columns in the result set share the same name or alias. "
+                "FIX: Add or change the AS alias on one of the duplicate columns "
+                "so every output column has a unique name."
+            )
+
+        if "syntax error" in e or "parse error" in e or "unterminated" in e:
             return (
                 "DIAGNOSIS: SQL syntax error. "
                 "Check for: unbalanced parentheses, missing commas, keywords used as identifiers "
-                "(quote them), or function calls written as `alias.FUNCTION()` instead of `FUNCTION(alias.col)`."
+                "(quote them with double-quotes), or function calls written as "
+                "`alias.FUNCTION()` instead of `FUNCTION(alias.col)`."
             )
 
-        if "invalid input syntax" in e or "invalid datetime" in e or "cannot cast" in e or "type" in e:
+        # ── Resource / performance errors (not always fixable, but LLM can optimise) ──
+
+        if any(p in e for p in (
+            "memory exhausted", "out of memory", "memory limit exceeded",
+            "disk spill", "work_mem", "not enough memory",
+            "exceeded memory", "query exceeded", "resources exceeded",
+        )):
             return (
-                "DIAGNOSIS: A type conversion or cast is failing. "
-                "FIX: Wrap the value with NULLIF(col, '') before casting to avoid empty-string errors, "
-                "or use TRY_CAST / TRY_TO_DATE where the dialect supports it."
+                "DIAGNOSIS: The query consumed too much memory or caused a disk spill. "
+                "FIX: Reduce the result set before aggregating — add a WHERE filter, "
+                "replace a CROSS JOIN with a filtered JOIN, add a LIMIT clause, "
+                "or pre-aggregate in a CTE/subquery to reduce row count before the final join."
             )
+
+        # ── Arithmetic ────────────────────────────────────────────────────────
 
         if "divide by zero" in e or "division by zero" in e:
             return (
