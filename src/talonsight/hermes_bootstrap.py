@@ -662,20 +662,51 @@ def _build_enriched_prompt(
         if not scores or scores[0][0] == 0:
             chosen = [n for n, _ in sorted(_all_cols.items(), key=lambda x: -len(x[1]))[:3]]
         else:
-            chosen = [name for score, name in scores[:3] if score > 0]
+            # Light stemming so "states"→"state", "customers"→"customer"
+            q_stem = q_tokens | {t[:-1] for t in q_tokens if t.endswith('s') and len(t) > 3}
+            scored_stem: list[tuple[int, str]] = []
+            for tbl_name, col_names in _all_cols.items():
+                tbl_tokens = set(re.split(r'[_\W]+', tbl_name.lower()))
+                col_tokens_s: set[str] = set()
+                for col in col_names:
+                    col_tokens_s.update(re.split(r'[_\W]+', col.lower()))
+                sc = len(q_stem & (tbl_tokens | col_tokens_s))
+                scored_stem.append((sc, tbl_name))
+            scored_stem.sort(key=lambda x: (-x[0], x[1]))
+            chosen = [name for sc, name in scored_stem[:3] if sc > 0]
             if not chosen:
-                chosen = [scores[0][1]]
+                chosen = [scored_stem[0][1]]
 
-        # Build qualified names for non-main tables so model references them correctly
-        _chosen_fqn = [
-            f"{_tbl_schema.get(n, 'main')}.{n}" if _tbl_schema.get(n, 'main') != 'main' else n
-            for n in chosen
-        ]
-        schema = _get_schema(chosen)
-        # Prepend a note about qualified references if any non-main tables are included
-        _non_main = [fqn for fqn in _chosen_fqn if '.' in fqn]
-        if _non_main:
-            schema = f"NOTE: Non-default schema tables must be referenced with their schema prefix in SQL.\n" + schema
+        # Expand with FK-linked bridge tables so JOIN chains work (cap at 4)
+        # Only use semantically safe FK keys to avoid false matches.
+        _FK = {'order_id', 'customer_id', 'seller_id', 'review_id', 'payment_id'}
+        for _seed in list(chosen):
+            if len(chosen) >= 4:
+                break
+            seed_fk = {c.lower() for c in _all_cols.get(_seed, [])} & _FK
+            if not seed_fk:
+                continue
+            for _, cand in scores:          # use original scores for ordering
+                if len(chosen) >= 4:
+                    break
+                if cand in chosen:
+                    continue
+                if seed_fk & {c.lower() for c in _all_cols.get(cand, [])}:
+                    chosen.append(cand)
+
+        # Build the schema string with fully-qualified names for non-main tables
+        # so the model writes the correct FROM / JOIN references.
+        schema_lines: list[str] = []
+        for tbl_name in chosen:
+            tschema = _tbl_schema.get(tbl_name, "main")
+            fqn = f"{tschema}.{tbl_name}" if tschema != "main" else tbl_name
+            # Get columns from information_schema result
+            col_rows = _all_cols.get(tbl_name, [])
+            schema_lines.append(f"\nTable: {fqn}")
+            for col in col_rows:
+                safe = f'"{col}"' if any(c in col for c in (' ', '-', '.')) else col
+                schema_lines.append(f"  {safe}")
+        schema = "\n".join(schema_lines) if schema_lines else _get_schema(chosen)
 
         # Build conversation context block for follow-up awareness
         conv_block = ""
@@ -698,9 +729,11 @@ def _build_enriched_prompt(
             f"{schema}\n\n"
             f"RULES:\n"
             f"- Call run_sql with a valid SELECT query.\n"
+            f"- Reference each table EXACTLY as shown above (e.g. 'ecommerce.customer' not 'customer').\n"
             f"- Use ONLY the tables listed above. Do NOT JOIN tables not listed.\n"
-            f"- Use EXACT column names shown (quoted names like \"Customer ID\" stay quoted).\n"
-            f"- GROUP BY and ORDER BY for ranked results.\n\n"
+            f"- Use EXACT column names shown — never guess or rename columns.\n"
+            f"- Do NOT add WHERE filters unless the question explicitly asks to filter.\n"
+            f"- GROUP BY and ORDER BY for ranked/aggregated results.\n\n"
             f"{conv_block}"
             f"QUESTION: {question}"
         )
