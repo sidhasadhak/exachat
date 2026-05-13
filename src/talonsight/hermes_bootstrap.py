@@ -541,12 +541,22 @@ def _clean_sql(sql: str) -> Optional[str]:
 
 
 def _execute_sql_safe(sql: str) -> tuple[str, str, Optional[pd.DataFrame]]:
-    """Run sql via the MCP server; return (markdown_table, error_or_empty, df_or_None)."""
+    """Run sql via the MCP server; return (markdown_table, error_or_empty, df_or_None).
+
+    Schema + table restrictions are enforced via the same allowlist that the
+    MCP server builds from information_schema — the agent cannot query tables
+    outside the connected database.
+    """
     try:
-        from talonsight.mcp_server import _get_core
+        from talonsight.mcp_server import _get_core, _get_allowlists
         from talonsight.safety import validate_sql, RiskLevel
         ts = _get_core()
-        verdict = validate_sql(sql)
+        _schemas, _tables = _get_allowlists()
+        verdict = validate_sql(
+            sql,
+            allowed_schemas=_schemas or None,
+            allowed_tables=_tables or None,
+        )
         if verdict.level == RiskLevel.BLOCKED:
             return f"BLOCKED: {verdict.reason}", "", None
         sql = sql.rstrip("; \n\t")

@@ -37,6 +37,44 @@ logger = logging.getLogger(__name__)
 _connector = None
 _schema_ctx = None
 _core_inst = None
+_allowed_schemas: set[str] | None = None
+_allowed_tables: set[str] | None = None
+
+
+def _get_allowlists() -> tuple[set[str], set[str]]:
+    """Return (allowed_schemas, allowed_tables) derived from the live database.
+
+    Lazily built once and cached for the lifetime of the MCP server process.
+    This is what gets passed to validate_sql() so the agent can ONLY query
+    tables that actually exist in the connected database — no access to
+    system catalogs, pg_catalog, or tables outside the connection.
+    """
+    global _allowed_schemas, _allowed_tables
+    if _allowed_schemas is not None and _allowed_tables is not None:
+        return _allowed_schemas, _allowed_tables
+
+    ts = _get_core()
+    try:
+        df = ts._db.execute_query(
+            "SELECT table_schema, table_name "
+            "FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('information_schema', 'pg_catalog') "
+            "AND table_type = 'BASE TABLE'"
+        )
+        schemas: set[str] = set()
+        tables: set[str] = set()
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                schemas.add(str(row["table_schema"]).upper())
+                tables.add(str(row["table_name"]).upper())
+        _allowed_schemas = schemas
+        _allowed_tables = tables
+    except Exception:
+        # If we can't enumerate tables, fall back to no restriction
+        # (safety patterns still block DDL/DML)
+        _allowed_schemas = set()
+        _allowed_tables = set()
+    return _allowed_schemas, _allowed_tables
 
 
 def _get_core():
@@ -154,7 +192,12 @@ def _run_sql(sql: str, limit: int = 200) -> str:
     from talonsight.safety import validate_sql, RiskLevel
     import re
 
-    verdict = validate_sql(sql)
+    _schemas, _tables = _get_allowlists()
+    verdict = validate_sql(
+        sql,
+        allowed_schemas=_schemas or None,
+        allowed_tables=_tables or None,
+    )
     if verdict.level == RiskLevel.BLOCKED:
         return f"BLOCKED: {verdict.reason}"
 
