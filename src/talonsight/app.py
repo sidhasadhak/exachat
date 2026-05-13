@@ -771,21 +771,38 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
                 for i, step in enumerate(r.agent_plan, 1):
                     st.markdown(f"{i}. {step}")
 
-        # Narrative — shown prominently above everything else
+        # Narrative — shown prominently above everything else.
+        # When actual data (r.data) is present we are strict about what goes in
+        # the Finding box: only clean prose is shown.  ASCII bar charts, text
+        # tables, separator lines, and column-header rows are all suppressed so
+        # the user sees exactly one thing — the Plotly chart/table below.
+        import re as _re
+        _ASCII_NOISE = _re.compile(
+            r'#{3,}'           # bar chart bars  ######
+            r'|^\s*[-=]{3,}'   # separator lines  ------
+            r'|\|\s*#{2,}'     # pipe + bars  | ####
+            r'|\btext.based\b' # "text-based bar chart" header
+            , _re.IGNORECASE
+        )
         if r.summary:
-            # Split prose from any embedded markdown table
             _summary_lines = r.summary.splitlines()
             _prose_lines, _table_lines = [], []
             _in_table = False
             for _ln in _summary_lines:
-                if _ln.strip().startswith("|"):
+                stripped = _ln.strip()
+                # When data is available, skip ASCII-art noise lines entirely
+                if r.data is not None and _ASCII_NOISE.search(_ln):
+                    continue
+                if stripped.startswith("|"):
                     _in_table = True
                 if _in_table:
                     _table_lines.append(_ln)
                 else:
                     _prose_lines.append(_ln)
             _prose = "\n".join(_prose_lines).strip()
-            _table_md = "\n".join(_table_lines).strip()
+            # When data is present, never render a text table — the Plotly
+            # table below is the authoritative view.
+            _table_md = "" if r.data is not None else "\n".join(_table_lines).strip()
 
             if _prose:
                 st.markdown(

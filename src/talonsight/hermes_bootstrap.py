@@ -1043,11 +1043,9 @@ def ask_hermes(
     # chart renderer can produce an actual Plotly bar chart.
     if answer and _df_from_ascii_chart(answer) is not None:
         _rescued_df = _df_from_ascii_chart(answer)
-        # Strip the "I cannot render…" preamble so only the key insight stays
-        _clean_answer = re.sub(
-            r"I cannot render[^\n]*\n?", "", answer, flags=re.IGNORECASE
-        ).strip()
-        return HermesResult(answer=_clean_answer, sql="", data=_rescued_df)
+        # The chart/table is the content — suppress the ASCII text entirely
+        # so the UI renders only the Plotly component, nothing else.
+        return HermesResult(answer="", sql="", data=_rescued_df)
 
     return HermesResult(answer=answer) if answer else HermesResult(answer="No answer was returned.")
 
