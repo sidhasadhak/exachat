@@ -25,7 +25,10 @@ from typing import TYPE_CHECKING, Any, Optional
 import pandas as pd
 
 from talonsight.capabilities import AgentCapabilities
-from talonsight.memory import BusinessModel, Finding
+from talonsight.memory import (
+    BusinessModel, Finding, KPI, DomainFact,
+    extract_kpis_from_sql, extract_domain_facts,
+)
 
 if TYPE_CHECKING:
     from talonsight.connection import DatabaseConnection
@@ -355,7 +358,7 @@ class AgentLoop:
         self._reset_state()
 
         messages: list[dict] = [
-            {"role": "system", "content": self._build_system_prompt()},
+            {"role": "system", "content": self._build_system_prompt(question)},
             {"role": "user", "content": question},
         ]
         steps: list[AgentStep] = []
@@ -424,14 +427,21 @@ class AgentLoop:
 
         total_ms = int((time.time() - t0) * 1000)
 
-        # Persist confirmed finding to BusinessModel
+        # Persist confirmed finding + auto-extract KPIs and domain facts
         if self._final_narrative and not agent_error:
+            sql = self._last_sql or ""
             self._bm.record_finding(Finding(
                 question=question,
                 narrative=self._final_narrative,
-                sql=self._last_sql or "",
-                tables_used=self._extract_tables(self._last_sql or ""),
+                sql=sql,
+                tables_used=self._extract_tables(sql),
             ))
+            # Auto-extract KPI definitions from the key SQL
+            for kpi in extract_kpis_from_sql(sql, source_question=question):
+                self._bm.record_kpi(kpi)
+            # Auto-extract domain facts from the narrative
+            for fact in extract_domain_facts(self._final_narrative, sql, question):
+                self._bm.record_domain_fact(fact)
 
         if not self._final_narrative:
             self._final_narrative = (
@@ -721,11 +731,10 @@ class AgentLoop:
 
     # ── System prompt ─────────────────────────────────────────────────
 
-    def _build_system_prompt(self) -> str:
-        past_context = self._bm.get_context(max_findings=5)
+    def _build_system_prompt(self, question: str = "") -> str:
+        past_context = self._bm.get_full_context(question=question, max_findings=6)
         past_block = (
-            f"\nCONFIRMED FINDINGS FROM PAST INVESTIGATIONS:\n{past_context}\n"
-            "Use these as trusted baselines. Do not re-derive what is already known.\n"
+            f"\nBUSINESS KNOWLEDGE (confirmed — treat as ground truth):\n{past_context}\n"
             if past_context else ""
         )
         dialect_name = self._dialect or "SQL"

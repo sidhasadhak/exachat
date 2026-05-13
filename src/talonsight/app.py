@@ -1428,7 +1428,58 @@ with st.sidebar:
         if st.session_state.connected and st.session_state.chat:
             st.caption(f"{st.session_state.chat.kb.count} SQL patterns loaded.")
 
-    # ── 7. METRICS CATALOG ────────────────────────────────────────────
+    # ── 7. BUSINESS INTELLIGENCE ──────────────────────────────────────
+    if st.session_state.get("connected") and st.session_state.get("chat"):
+        _bm = st.session_state.chat.business_model
+        _bm_summary = _bm.summary()
+        with st.expander(f"🧠 Business Intelligence — {_bm_summary}", expanded=False):
+            _bm_findings  = _bm.get_recent_findings(5)
+            _bm_kpis      = _bm.get_kpis()
+            _bm_facts     = _bm.get_domain_facts()
+
+            if not _bm_findings and not _bm_kpis and not _bm_facts:
+                st.caption(
+                    "Nothing yet. Ask questions in Agent Mode — every "
+                    "confirmed answer enriches the business knowledge here."
+                )
+            else:
+                if _bm_facts:
+                    st.markdown("**📌 Data Facts**")
+                    for _f in _bm_facts[-5:]:
+                        st.markdown(
+                            f'<div style="font-size:.78rem;color:#94a3b8;'
+                            f'padding:2px 0">• {_f["fact"]}</div>',
+                            unsafe_allow_html=True,
+                        )
+                if _bm_kpis:
+                    st.markdown("**📊 Discovered KPIs**")
+                    for _k in _bm_kpis[-5:]:
+                        st.markdown(
+                            f'<div style="font-size:.78rem;color:#6ee7b7;'
+                            f'padding:2px 0">'
+                            f'<b>{_k["name"]}</b> — '
+                            f'<code style="font-size:.72rem">'
+                            f'{_k["sql_expression"]}</code>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                if _bm_findings:
+                    st.markdown("**🔍 Recent Findings**")
+                    for _fi in _bm_findings[:5]:
+                        ts = _fi.get("timestamp", "")[:10]
+                        st.markdown(
+                            f'<div style="font-size:.75rem;color:#64748b;'
+                            f'padding:3px 0;border-left:2px solid #1e3a5f;'
+                            f'padding-left:8px;margin-bottom:4px">'
+                            f'<span style="color:#475569">[{ts}]</span> '
+                            f'{_fi["question"]}<br>'
+                            f'<span style="color:#94a3b8">'
+                            f'{_fi["narrative"][:120]}…</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+    # ── 8. METRICS CATALOG ────────────────────────────────────────────
     with st.expander("📐 Metrics Catalog", expanded=False):
         st.text_input(
             "Metrics directory",
