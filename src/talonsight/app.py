@@ -1706,6 +1706,65 @@ tab_ask, tab_build, tab_metrics, tab_dq, tab_schema = st.tabs(
 
 # ── ASK tab ──────────────────────────────────────────────────────────
 with tab_ask:
+    # ── Intelligence summary card — shown once, before any messages ────
+    if not st.session_state.messages and st.session_state.get("connected") and st.session_state.get("chat"):
+        _ce = st.session_state.chat
+        _sg = _ce.schema_graph.to_dict()
+        _sbm = _ce.business_model
+
+        _dom     = _sg.get("domain", "unknown")
+        _dom_col = {
+            "e-commerce": "#f97316", "saas": "#6366f1", "finance": "#10b981",
+            "hr": "#ec4899", "healthcare": "#06b6d4", "logistics": "#84cc16",
+            "analytics": "#a855f7",
+        }.get(_dom, "#64748b")
+        _dom_lbl = _dom.replace("-", " ").title()
+
+        # Table type counts
+        _type_counts: dict[str, int] = {}
+        for _tn in _sg.get("nodes", []):
+            _type_counts[_tn["type"]] = _type_counts.get(_tn["type"], 0) + 1
+
+        _table_pills = " ".join(
+            f'<span style="background:{{"fact":"#f9731622","dimension":"#6366f122","bridge":"#10b98122","lookup":"#64748b22"}.get(t,"#33415522")};'
+            f'color:{{"fact":"#f97316","dimension":"#818cf8","bridge":"#34d399","lookup":"#94a3b8"}.get(t,"#94a3b8")};'
+            f'border:1px solid {{"fact":"#f9731644","dimension":"#6366f144","bridge":"#10b98144","lookup":"#64748b44"}.get(t,"#33415544")};'
+            f'padding:2px 9px;border-radius:12px;font-size:.72rem;font-weight:600">'
+            f'{t} {n}</span>'
+            for t, n in sorted(_type_counts.items())
+        )
+
+        _rels_count = len(_sg.get("relationships", []))
+        _bi_parts   = []
+        if _sbm.finding_count(): _bi_parts.append(f"{_sbm.finding_count()} findings")
+        if _sbm.kpi_count():     _bi_parts.append(f"{_sbm.kpi_count()} KPIs")
+        if _sbm.fact_count():    _bi_parts.append(f"{_sbm.fact_count()} facts")
+        _bi_str = " · ".join(_bi_parts) if _bi_parts else "No prior knowledge — start asking!"
+
+        st.markdown(
+            f"""
+            <div style="background:#111827;border:1px solid #1e2d40;
+                        border-radius:12px;padding:18px 22px;margin-bottom:20px">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+                <span style="background:{_dom_col}22;color:{_dom_col};
+                    border:1px solid {_dom_col}55;padding:3px 12px;
+                    border-radius:20px;font-size:.76rem;font-weight:700;
+                    letter-spacing:.05em">{_dom_lbl}</span>
+                <span style="color:#475569;font-size:.76rem">
+                  {len(_sg.get("nodes",[]))} tables · {_rels_count} join path{"s" if _rels_count != 1 else ""}
+                </span>
+              </div>
+              <div style="margin-bottom:10px">{_table_pills}</div>
+              <div style="color:#64748b;font-size:.76rem;border-top:1px solid #1e2d40;
+                          padding-top:8px;margin-top:4px">
+                🧠 <span style="color:#475569">Business knowledge:</span>
+                <span style="color:#94a3b8">{_bi_str}</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     # Explore question grid — shown only before the first message
     if not st.session_state.messages:
         # Lazy-load: generate on first render after connect, not during connect

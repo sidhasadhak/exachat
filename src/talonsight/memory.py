@@ -107,6 +107,7 @@ class BusinessModel:
         )[:120]
         self._path = _MEMORY_DIR / f"{safe_id}.json"
         self._data = self._load()
+        self._purge_invalid_findings()  # clean up any corrupt entries from old runs
 
     # ── Persistence ───────────────────────────────────────────────────────────
 
@@ -135,8 +136,27 @@ class BusinessModel:
 
     # ── Write API ─────────────────────────────────────────────────────────────
 
+    def _purge_invalid_findings(self) -> None:
+        """Remove findings whose narrative looks like a JSON blob or agent error.
+        Called once on load to clean up corrupt entries from old runs.
+        """
+        before = len(self._data.get("findings", []))
+        self._data["findings"] = [
+            f for f in self._data.get("findings", [])
+            if _is_valid_narrative(f.get("narrative", ""))
+        ]
+        if len(self._data["findings"]) < before:
+            self._save()
+            logger.info(
+                "BusinessModel: purged %d invalid finding(s)",
+                before - len(self._data["findings"]),
+            )
+
     def record_finding(self, finding: Finding) -> None:
         """Append a confirmed finding after a successful final_answer."""
+        if not _is_valid_narrative(finding.narrative):
+            logger.debug("BusinessModel: skipping invalid finding narrative")
+            return
         self._data["findings"].append(asdict(finding))
         # Prune oldest if over cap
         if len(self._data["findings"]) > _MAX_FINDINGS:
@@ -442,6 +462,30 @@ def _tokenise(text: str) -> set[str]:
         w for w in re.split(r"\W+", text.lower())
         if len(w) > 2 and w not in _STOP
     }
+
+def _is_valid_narrative(text: str) -> bool:
+    """Return False if the narrative looks like a JSON blob, agent error, or
+    other non-human-readable content that should never be stored as a finding."""
+    if not text or len(text.strip()) < 20:
+        return False
+    t = text.strip()
+    # Starts with JSON object/array
+    if t.startswith(("{", "[", "```")):
+        return False
+    # Contains agent internal markers
+    bad_markers = (
+        '"plan":', '"steps":', '"tool_call"', '"function"',
+        "TOOL ERROR", "SQL ERROR", "BLOCKED:", "Investigation reached the step limit",
+        "internal error",
+    )
+    tl = t.lower()
+    if any(m.lower() in tl for m in bad_markers):
+        return False
+    # Looks like raw JSON key-value pairs
+    if re.search(r'"\w+":\s*[\[{"\d]', t):
+        return False
+    return True
+
 
 def _relevance_score(query: str, candidate: str) -> float:
     """Simple token-overlap relevance — no external deps."""
