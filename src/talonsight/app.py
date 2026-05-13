@@ -823,6 +823,44 @@ def _render_result(r: QueryResult, elapsed: float | None = None):
     if r.agent_steps is None and r.summary:
         st.markdown(_clean_summary(r.summary))
 
+    # ── Proactive insights — relevant past findings surfaced automatically ──
+    # Pull from the session's BusinessModel; score against this question.
+    try:
+        _bm_ref = st.session_state.get("chat") and st.session_state.chat.business_model
+        if _bm_ref and _bm_ref.finding_count() > 0:
+            from talonsight.memory import _relevance_score
+            _all_findings = _bm_ref.get_recent_findings(50)
+            _current_q    = r.question
+            _current_narr = r.summary or ""
+            _scored = [
+                (f, _relevance_score(_current_q, f["question"] + " " + f["narrative"]))
+                for f in _all_findings
+                # Exclude this exact question to avoid self-reference
+                if f["question"].strip().lower() != _current_q.strip().lower()
+            ]
+            _relevant = [f for f, s in sorted(_scored, key=lambda x: x[1], reverse=True)
+                         if s > 0.15][:3]
+            if _relevant:
+                with st.expander("💡 Related insights from past investigations", expanded=False):
+                    for _pf in _relevant:
+                        _pts = _pf.get("timestamp","")[:10]
+                        st.markdown(
+                            f'<div style="border-left:3px solid #6366f1;'
+                            f'padding:8px 12px;margin-bottom:8px;'
+                            f'border-radius:0 6px 6px 0;background:#0f1929">'
+                            f'<div style="color:#818cf8;font-size:.72rem;margin-bottom:3px">'
+                            f'🕐 {_pts}</div>'
+                            f'<div style="color:#94a3b8;font-size:.78rem;font-weight:500">'
+                            f'{_pf["question"]}</div>'
+                            f'<div style="color:#64748b;font-size:.76rem;margin-top:4px;'
+                            f'line-height:1.5">{_pf["narrative"][:180]}'
+                            + ("…" if len(_pf["narrative"]) > 180 else "")
+                            + f'</div></div>',
+                            unsafe_allow_html=True,
+                        )
+    except Exception:
+        pass  # proactive insights must never crash the render
+
     if r.agent_steps is None:
         with st.expander("🔍 Generated SQL", expanded=False):
             if r.safety.level == RiskLevel.SAFE:
@@ -1428,58 +1466,7 @@ with st.sidebar:
         if st.session_state.connected and st.session_state.chat:
             st.caption(f"{st.session_state.chat.kb.count} SQL patterns loaded.")
 
-    # ── 7. BUSINESS INTELLIGENCE ──────────────────────────────────────
-    if st.session_state.get("connected") and st.session_state.get("chat"):
-        _bm = st.session_state.chat.business_model
-        _bm_summary = _bm.summary()
-        with st.expander(f"🧠 Business Intelligence — {_bm_summary}", expanded=False):
-            _bm_findings  = _bm.get_recent_findings(5)
-            _bm_kpis      = _bm.get_kpis()
-            _bm_facts     = _bm.get_domain_facts()
-
-            if not _bm_findings and not _bm_kpis and not _bm_facts:
-                st.caption(
-                    "Nothing yet. Ask questions in Agent Mode — every "
-                    "confirmed answer enriches the business knowledge here."
-                )
-            else:
-                if _bm_facts:
-                    st.markdown("**📌 Data Facts**")
-                    for _f in _bm_facts[-5:]:
-                        st.markdown(
-                            f'<div style="font-size:.78rem;color:#94a3b8;'
-                            f'padding:2px 0">• {_f["fact"]}</div>',
-                            unsafe_allow_html=True,
-                        )
-                if _bm_kpis:
-                    st.markdown("**📊 Discovered KPIs**")
-                    for _k in _bm_kpis[-5:]:
-                        st.markdown(
-                            f'<div style="font-size:.78rem;color:#6ee7b7;'
-                            f'padding:2px 0">'
-                            f'<b>{_k["name"]}</b> — '
-                            f'<code style="font-size:.72rem">'
-                            f'{_k["sql_expression"]}</code>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                if _bm_findings:
-                    st.markdown("**🔍 Recent Findings**")
-                    for _fi in _bm_findings[:5]:
-                        ts = _fi.get("timestamp", "")[:10]
-                        st.markdown(
-                            f'<div style="font-size:.75rem;color:#64748b;'
-                            f'padding:3px 0;border-left:2px solid #1e3a5f;'
-                            f'padding-left:8px;margin-bottom:4px">'
-                            f'<span style="color:#475569">[{ts}]</span> '
-                            f'{_fi["question"]}<br>'
-                            f'<span style="color:#94a3b8">'
-                            f'{_fi["narrative"][:120]}…</span>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-
-    # ── 8. METRICS CATALOG ────────────────────────────────────────────
+    # ── 7. METRICS CATALOG ────────────────────────────────────────────
     with st.expander("📐 Metrics Catalog", expanded=False):
         st.text_input(
             "Metrics directory",
@@ -1700,8 +1687,8 @@ _stc.html("""<script>
 })();
 </script>""", height=0)
 
-tab_ask, tab_build, tab_metrics, tab_dq, tab_schema = st.tabs(
-    ["💬 Ask", "📊 Build", "📐 Metrics", "🔍 Data Quality", "🗺️ Schema"]
+tab_ask, tab_intelligence, tab_build, tab_metrics, tab_dq, tab_schema = st.tabs(
+    ["💬 Ask", "🧠 Intelligence", "📊 Build", "📐 Metrics", "🔍 Data Quality", "🗺️ Schema"]
 )
 
 # ── ASK tab ──────────────────────────────────────────────────────────
@@ -1877,6 +1864,137 @@ with tab_ask:
         st.rerun()
 
 # ── BUILD tab ────────────────────────────────────────────────────────
+# ── INTELLIGENCE tab ─────────────────────────────────────────────────
+with tab_intelligence:
+    if not st.session_state.get("connected") or not st.session_state.get("chat"):
+        st.info("Connect to a database to see accumulated business intelligence.")
+    else:
+        _i_chat = st.session_state.chat
+        _i_bm   = _i_chat.business_model
+        _i_sg   = _i_chat.schema_graph.to_dict()
+
+        # ── Header ────────────────────────────────────────────────────
+        _i_dom     = _i_sg.get("domain", "unknown")
+        _i_dom_col = {
+            "e-commerce":"#f97316","saas":"#6366f1","finance":"#10b981",
+            "hr":"#ec4899","healthcare":"#06b6d4","logistics":"#84cc16",
+            "analytics":"#a855f7",
+        }.get(_i_dom, "#64748b")
+        _i_dom_lbl = _i_dom.replace("-"," ").title()
+        _i_conf    = int(_i_sg.get("domain_confidence", 0) * 100)
+
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">'
+            f'<span style="background:{_i_dom_col}22;color:{_i_dom_col};'
+            f'border:1px solid {_i_dom_col}55;padding:4px 14px;border-radius:20px;'
+            f'font-size:.82rem;font-weight:700">{_i_dom_lbl}</span>'
+            f'<span style="color:#475569;font-size:.8rem">'
+            f'{_i_conf}% domain confidence · {_i_sg.get("summary","")}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "Everything talonsight has learned about your data. "
+            "Grows automatically with every Agent Mode investigation."
+        )
+        st.markdown("---")
+
+        _i_facts    = _i_bm.get_domain_facts()
+        _i_kpis     = _i_bm.get_kpis()
+        _i_findings = _i_bm.get_recent_findings(50)
+
+        if not _i_facts and not _i_kpis and not _i_findings:
+            st.markdown(
+                '<div style="text-align:center;padding:60px 0;color:#475569">'
+                '<div style="font-size:2rem;margin-bottom:12px">🧠</div>'
+                '<div style="font-size:1rem;font-weight:600;color:#64748b">No knowledge yet</div>'
+                '<div style="font-size:.85rem;margin-top:6px">Ask questions in Agent Mode.<br>'
+                'Every confirmed answer enriches this knowledge base.</div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            _ic1, _ic2 = st.columns([1, 1])
+
+            with _ic1:
+                # ── Domain Facts ──────────────────────────────────────
+                st.markdown("### 📌 Data Facts")
+                if _i_facts:
+                    _cat_order = ["date_range", "segment", "quality", "general"]
+                    _cat_col   = {"date_range":"#6366f1","segment":"#f97316",
+                                  "quality":"#ef4444","general":"#64748b"}
+                    for _f in reversed(_i_facts[-20:]):
+                        _fc = _cat_col.get(_f.get("category","general"), "#64748b")
+                        _conf_badge = (
+                            '<span style="color:#f59e0b;font-size:.65rem"> ~inferred</span>'
+                            if _f.get("confidence") == "inferred" else ""
+                        )
+                        st.markdown(
+                            f'<div style="border-left:3px solid {_fc};padding:6px 10px;'
+                            f'margin-bottom:6px;border-radius:0 6px 6px 0;'
+                            f'background:#111827">'
+                            f'<span style="color:#e2e8f0;font-size:.82rem">{_f["fact"]}</span>'
+                            f'{_conf_badge}'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption("No data facts confirmed yet.")
+
+                st.markdown("---")
+
+                # ── KPI Definitions ───────────────────────────────────
+                st.markdown("### 📊 Discovered KPIs")
+                if _i_kpis:
+                    for _k in reversed(_i_kpis[-20:]):
+                        _kval = (
+                            f' &nbsp;<span style="color:#34d399;font-size:.72rem">'
+                            f'last: {_k["last_value"]:,.2f}</span>'
+                            if _k.get("last_value") is not None else ""
+                        )
+                        _kunit = f' [{_k["unit"]}]' if _k.get("unit") else ""
+                        st.markdown(
+                            f'<div style="background:#0f1929;border:1px solid #1e2d40;'
+                            f'border-radius:8px;padding:8px 12px;margin-bottom:6px">'
+                            f'<div style="color:#6ee7b7;font-size:.82rem;font-weight:600">'
+                            f'{_k["name"]}{_kunit}{_kval}</div>'
+                            f'<code style="color:#94a3b8;font-size:.74rem">'
+                            f'{_k["sql_expression"]}</code>'
+                            f'<div style="color:#334155;font-size:.68rem;margin-top:2px">'
+                            f'from {_k["table"]}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption("No KPIs discovered yet.")
+
+            with _ic2:
+                # ── Finding history ───────────────────────────────────
+                st.markdown(f"### 🔍 Findings ({len(_i_findings)})")
+                if _i_findings:
+                    for _fi in _i_findings:
+                        _ts  = _fi.get("timestamp","")[:10]
+                        _tbls = ", ".join(_fi.get("tables_used",[])[:3])
+                        st.markdown(
+                            f'<div style="background:#0f1929;border:1px solid #1e2d40;'
+                            f'border-radius:8px;padding:10px 14px;margin-bottom:8px">'
+                            f'<div style="color:#94a3b8;font-size:.72rem;margin-bottom:4px">'
+                            f'{_ts}'
+                            + (f' · <span style="color:#334155">{_tbls}</span>' if _tbls else "")
+                            + f'</div>'
+                            f'<div style="color:#e2e8f0;font-size:.82rem;font-weight:500;'
+                            f'margin-bottom:4px">{_fi["question"]}</div>'
+                            f'<div style="color:#64748b;font-size:.78rem;line-height:1.5">'
+                            f'{_fi["narrative"][:200]}'
+                            + ("…" if len(_fi["narrative"]) > 200 else "")
+                            + f'</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.caption("No findings yet.")
+
+# ── BUILD tab ─────────────────────────────────────────────────────────
 with tab_build:
     # If "Open in Builder" was clicked in the Ask tab, seed the builder
     open_sql = st.session_state.pop("open_in_builder", None)
