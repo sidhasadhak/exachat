@@ -879,6 +879,23 @@ def ask_hermes(
 
     emit("🧠 Analyst starting…")
 
+    # Re-sync hermes config with current preferences so the correct model is
+    # always used — the YAML is only written during onboarding, so if the user
+    # changes the model in the TalonSight UI the subprocess would otherwise still
+    # use the old model (e.g. hermes3:8b instead of gemma4:31b-cloud).
+    try:
+        from talonsight.preferences import Preferences as _Prefs
+        _p = _Prefs.load()
+        if _p.llm_model:
+            _write_config_yaml(
+                _p.llm_provider or "ollama",
+                _p.llm_model,
+                _p.llm_url or "",
+                _p.llm_api_key or "",
+            )
+    except Exception:
+        pass  # non-fatal — proceed with whatever config is already on disk
+
     # Prepend schema + recent chat history so the model has full context
     enriched_question = _build_enriched_prompt(question, history=history)
 
